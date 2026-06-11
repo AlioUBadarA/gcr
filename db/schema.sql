@@ -23,10 +23,62 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 -- Migrations idempotentes pour bases existantes
-ALTER TABLE users ADD COLUMN IF NOT EXISTS role             VARCHAR(20) NOT NULL DEFAULT 'rizier' CHECK (role IN ('rizier','superadmin'));
+ALTER TABLE users ADD COLUMN IF NOT EXISTS role             VARCHAR(20) NOT NULL DEFAULT 'rizier';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS suspended        BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS suspended_at     TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS suspended_reason TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS parent_id        UUID REFERENCES users(id) ON DELETE SET NULL;
+
+-- Étend la contrainte role pour inclure vendeur
+DO $$
+DECLARE c TEXT;
+BEGIN
+  SELECT conname INTO c FROM pg_constraint
+  WHERE conrelid = 'users'::regclass AND contype = 'c'
+    AND pg_get_constraintdef(oid) LIKE '%role%' LIMIT 1;
+  IF c IS NOT NULL THEN EXECUTE format('ALTER TABLE users DROP CONSTRAINT %I', c); END IF;
+  BEGIN
+    ALTER TABLE users ADD CONSTRAINT users_role_check
+      CHECK (role IN ('rizier','superadmin','vendeur'));
+  EXCEPTION WHEN duplicate_object THEN NULL; END;
+END $$;
+
+-- forecast : objectifs mensuels
+CREATE TABLE IF NOT EXISTS forecast (
+  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id          UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  annee            INT NOT NULL,
+  mois             INT NOT NULL CHECK (mois BETWEEN 1 AND 12),
+  produit          VARCHAR(100) NOT NULL DEFAULT 'Général',
+  objectif_montant NUMERIC(14,2) NOT NULL DEFAULT 0,
+  created_at       TIMESTAMPTZ DEFAULT NOW(),
+  updated_at       TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(user_id, annee, mois, produit)
+);
+
+-- prospection : pipeline nouveaux clients
+CREATE TABLE IF NOT EXISTS prospection (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id      UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  nom          VARCHAR(150) NOT NULL,
+  type_client  VARCHAR(50),
+  zone         VARCHAR(100),
+  telephone    VARCHAR(30),
+  statut       VARCHAR(40) NOT NULL DEFAULT 'Nouveau'
+               CHECK (statut IN ('Nouveau','En contact','Présentation faite','Devis envoyé','Gagné','Perdu')),
+  priorite     VARCHAR(20) DEFAULT 'Normale'
+               CHECK (priorite IN ('Haute','Normale','Basse')),
+  date_contact DATE,
+  note         TEXT,
+  created_at   TIMESTAMPTZ DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- cout_unitaire sur ventes pour le calcul de rentabilité
+ALTER TABLE ventes ADD COLUMN IF NOT EXISTS cout_unitaire NUMERIC(10,2) DEFAULT 0;
+
+CREATE INDEX IF NOT EXISTS idx_forecast_user    ON forecast(user_id, annee);
+CREATE INDEX IF NOT EXISTS idx_prospection_user ON prospection(user_id);
 
 CREATE TABLE IF NOT EXISTS audit_logs (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),

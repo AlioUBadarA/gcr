@@ -1,6 +1,7 @@
 const express = require('express');
 const { pool } = require('../db/pool');
 const auth = require('../middleware/auth');
+const { getScopeIds } = require('../middleware/scope');
 
 const router = express.Router();
 router.use(auth);
@@ -12,19 +13,23 @@ const STATUTS_VALIDES = ['Actif','Prospect','Dormant'];
 router.get('/', async (req, res) => {
   try {
     const { statut, type, search } = req.query;
-    let q = 'SELECT * FROM clients WHERE user_id = $1';
-    const params = [req.userId];
+    const ids = await getScopeIds(req.userId, req.userRole);
+    let q = `SELECT c.*, u.nom AS vendeur_nom
+             FROM clients c
+             LEFT JOIN users u ON u.id = c.user_id
+             WHERE c.user_id = ANY($1::uuid[])`;
+    const params = [ids];
     if (statut && STATUTS_VALIDES.includes(statut)) {
-      q += ` AND statut = $${params.length + 1}`; params.push(statut);
+      q += ` AND c.statut = $${params.length + 1}`; params.push(statut);
     }
     if (type && TYPES_VALIDES.includes(type)) {
-      q += ` AND type = $${params.length + 1}`; params.push(type);
+      q += ` AND c.type = $${params.length + 1}`; params.push(type);
     }
     if (search) {
-      q += ` AND (nom ILIKE $${params.length + 1} OR zone ILIKE $${params.length + 1})`;
+      q += ` AND (c.nom ILIKE $${params.length + 1} OR c.zone ILIKE $${params.length + 1})`;
       params.push(`%${search}%`);
     }
-    q += ' ORDER BY statut, nom';
+    q += ' ORDER BY c.statut, c.nom';
     const result = await pool.query(q, params);
     res.json(result.rows);
   } catch (err) {

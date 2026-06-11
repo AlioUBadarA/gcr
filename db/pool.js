@@ -49,6 +49,40 @@ async function runMigrations() {
     )`,
     `CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_audit_actor   ON audit_logs(actor_id)`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS parent_id UUID REFERENCES users(id) ON DELETE SET NULL`,
+    `DO $$
+     DECLARE c TEXT;
+     BEGIN
+       SELECT conname INTO c FROM pg_constraint
+       WHERE conrelid = 'users'::regclass AND contype = 'c'
+         AND pg_get_constraintdef(oid) LIKE '%role%' LIMIT 1;
+       IF c IS NOT NULL THEN EXECUTE format('ALTER TABLE users DROP CONSTRAINT %I', c); END IF;
+       BEGIN
+         ALTER TABLE users ADD CONSTRAINT users_role_check
+           CHECK (role IN ('rizier','superadmin','vendeur'));
+       EXCEPTION WHEN duplicate_object THEN NULL; END;
+     END $$`,
+    `CREATE TABLE IF NOT EXISTS forecast (
+       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+       user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       annee INT NOT NULL, mois INT NOT NULL CHECK (mois BETWEEN 1 AND 12),
+       produit VARCHAR(100) NOT NULL DEFAULT 'Général',
+       objectif_montant NUMERIC(14,2) NOT NULL DEFAULT 0,
+       created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW(),
+       UNIQUE(user_id, annee, mois, produit)
+     )`,
+    `CREATE TABLE IF NOT EXISTS prospection (
+       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+       user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       nom VARCHAR(150) NOT NULL, type_client VARCHAR(50), zone VARCHAR(100), telephone VARCHAR(30),
+       statut VARCHAR(40) NOT NULL DEFAULT 'Nouveau',
+       priorite VARCHAR(20) DEFAULT 'Normale',
+       date_contact DATE, note TEXT,
+       created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW()
+     )`,
+    `ALTER TABLE ventes ADD COLUMN IF NOT EXISTS cout_unitaire NUMERIC(10,2) DEFAULT 0`,
+    `CREATE INDEX IF NOT EXISTS idx_forecast_user    ON forecast(user_id, annee)`,
+    `CREATE INDEX IF NOT EXISTS idx_prospection_user ON prospection(user_id)`,
   ];
 
   for (let i = 0; i < migrations.length; i++) {

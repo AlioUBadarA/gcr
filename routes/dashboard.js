@@ -1,6 +1,7 @@
 const express = require('express');
 const { pool } = require('../db/pool');
 const auth = require('../middleware/auth');
+const { getScopeIds } = require('../middleware/scope');
 
 const router = express.Router();
 router.use(auth);
@@ -8,14 +9,13 @@ router.use(auth);
 // GET /api/dashboard
 router.get('/', async (req, res) => {
   try {
-    const uid = req.userId;
     const now = new Date();
     const m = now.getMonth() + 1;
     const y = now.getFullYear();
+    const ids = await getScopeIds(req.userId, req.userRole);
 
     const [kpis, mensuel, topClients, creances, alertes] = await Promise.all([
 
-      // KPIs globaux du mois courant
       pool.query(`
         SELECT
           COALESCE(SUM(montant) FILTER (WHERE EXTRACT(MONTH FROM date_vente)=$2 AND EXTRACT(YEAR FROM date_vente)=$3), 0) AS ca_mois,
@@ -24,49 +24,45 @@ router.get('/', async (req, res) => {
           COUNT(*) FILTER (WHERE statut_paiement != 'Paye') AS nb_creances,
           COALESCE(SUM(montant) FILTER (WHERE statut_paiement = 'Paye'), 0) AS total_paye,
           COALESCE(SUM(montant), 0) AS total_facture
-        FROM ventes WHERE user_id=$1`,
-        [uid, m, y]
+        FROM ventes WHERE user_id = ANY($1::uuid[])`,
+        [ids, m, y]
       ),
 
-      // CA des 6 derniers mois
       pool.query(`
         SELECT
           EXTRACT(YEAR  FROM date_vente)::int AS annee,
           EXTRACT(MONTH FROM date_vente)::int AS mois,
           COALESCE(SUM(montant), 0) AS ca
         FROM ventes
-        WHERE user_id=$1
+        WHERE user_id = ANY($1::uuid[])
           AND date_vente >= (NOW() - INTERVAL '6 months')
         GROUP BY annee, mois
         ORDER BY annee, mois`,
-        [uid]
+        [ids]
       ),
 
-      // Top 5 clients par CA total
       pool.query(`
         SELECT client_nom, COALESCE(SUM(montant),0) AS ca_total, COUNT(*) AS nb_ventes
-        FROM ventes WHERE user_id=$1
+        FROM ventes WHERE user_id = ANY($1::uuid[])
         GROUP BY client_nom ORDER BY ca_total DESC LIMIT 5`,
-        [uid]
+        [ids]
       ),
 
-      // Detail creances
       pool.query(`
         SELECT
           COALESCE(SUM(montant) FILTER (WHERE statut_paiement='En retard'), 0) AS montant_retard,
           COUNT(*) FILTER (WHERE statut_paiement='En retard') AS nb_retard,
           COALESCE(SUM(montant) FILTER (WHERE statut_paiement='En cours'), 0) AS montant_encours,
           COUNT(*) FILTER (WHERE statut_paiement='En cours') AS nb_encours
-        FROM ventes WHERE user_id=$1`,
-        [uid]
+        FROM ventes WHERE user_id = ANY($1::uuid[])`,
+        [ids]
       ),
 
-      // Clients par statut
       pool.query(`
         SELECT statut, COUNT(*) AS nb
-        FROM clients WHERE user_id=$1
+        FROM clients WHERE user_id = ANY($1::uuid[])
         GROUP BY statut`,
-        [uid]
+        [ids]
       ),
     ]);
 

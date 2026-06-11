@@ -41,12 +41,17 @@ app.get('/health', (req, res) => {
 });
 
 // ── Routes ────────────────────────────────────────────────────
-app.use('/api/auth',      require('./routes/auth'));
-app.use('/api/clients',   require('./routes/clients'));
-app.use('/api/ventes',    require('./routes/ventes'));
-app.use('/api/pilotage',  require('./routes/pilotage'));
-app.use('/api/dashboard', require('./routes/dashboard'));
-app.use('/api/admin',     require('./routes/admin'));
+app.use('/api/auth',        require('./routes/auth'));
+app.use('/api/clients',     require('./routes/clients'));
+app.use('/api/ventes',      require('./routes/ventes'));
+app.use('/api/pilotage',    require('./routes/pilotage'));
+app.use('/api/dashboard',   require('./routes/dashboard'));
+app.use('/api/admin',       require('./routes/admin'));
+app.use('/api/equipe',      require('./routes/equipe'));
+app.use('/api/forecast',    require('./routes/forecast'));
+app.use('/api/prospection', require('./routes/prospection'));
+app.use('/api/actions',     require('./routes/actions'));
+app.use('/api/rentabilite', require('./routes/rentabilite'));
 
 // ── 404 ───────────────────────────────────────────────────────
 app.use((req, res) => {

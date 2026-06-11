@@ -1,6 +1,7 @@
 const express = require('express');
 const { pool } = require('../db/pool');
 const auth = require('../middleware/auth');
+const { getScopeIds } = require('../middleware/scope');
 
 const router = express.Router();
 router.use(auth);
@@ -11,11 +12,13 @@ const STATUTS = ['Paye','En cours','En retard'];
 router.get('/', async (req, res) => {
   try {
     const { mois, annee, statut, client_id, limit = 200, offset = 0 } = req.query;
-    let q = `SELECT v.*, c.type as client_type
+    const ids = await getScopeIds(req.userId, req.userRole);
+    let q = `SELECT v.*, c.type as client_type, u.nom as vendeur_nom
              FROM ventes v
              LEFT JOIN clients c ON v.client_id = c.id
-             WHERE v.user_id = $1`;
-    const params = [req.userId];
+             LEFT JOIN users u ON u.id = v.user_id
+             WHERE v.user_id = ANY($1::uuid[])`;
+    const params = [ids];
 
     if (mois && annee) {
       q += ` AND EXTRACT(MONTH FROM date_vente) = $${params.length+1}
