@@ -80,6 +80,63 @@ ALTER TABLE ventes ADD COLUMN IF NOT EXISTS cout_unitaire NUMERIC(10,2) DEFAULT 
 CREATE INDEX IF NOT EXISTS idx_forecast_user    ON forecast(user_id, annee);
 CREATE INDEX IF NOT EXISTS idx_prospection_user ON prospection(user_id);
 
+-- emplois : liste des employés de la rizerie
+CREATE TABLE IF NOT EXISTS emplois (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  nom           VARCHAR(150) NOT NULL,
+  poste         VARCHAR(100),
+  type_contrat  VARCHAR(30) DEFAULT 'CDI'
+                CHECK (type_contrat IN ('CDI','CDD','Temps partiel','Stage','Journalier')),
+  date_embauche DATE,
+  salaire       NUMERIC(12,2),
+  telephone     VARCHAR(30),
+  note          TEXT,
+  created_at    TIMESTAMPTZ DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- contrats_clients : commandes récurrentes aval
+CREATE TABLE IF NOT EXISTS contrats_clients (
+  id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id            UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  client_id          UUID REFERENCES clients(id) ON DELETE SET NULL,
+  client_nom         VARCHAR(150) NOT NULL,
+  produit            VARCHAR(100) NOT NULL,
+  quantite_mensuelle NUMERIC(10,2) DEFAULT 0,
+  prix_unitaire      NUMERIC(10,2) DEFAULT 0,
+  date_debut         DATE,
+  date_fin           DATE,
+  statut             VARCHAR(20) DEFAULT 'Actif'
+                     CHECK (statut IN ('Actif','Suspendu','Terminé')),
+  note               TEXT,
+  created_at         TIMESTAMPTZ DEFAULT NOW(),
+  updated_at         TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- contrats_paddy : contractualisation producteurs amont
+CREATE TABLE IF NOT EXISTS contrats_paddy (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  producteur_nom  VARCHAR(150) NOT NULL,
+  zone            VARCHAR(100),
+  telephone       VARCHAR(30),
+  variete         VARCHAR(100),
+  quantite_kg     NUMERIC(12,2) DEFAULT 0,
+  prix_kg         NUMERIC(10,2) DEFAULT 0,
+  date_debut      DATE,
+  date_fin        DATE,
+  statut          VARCHAR(20) DEFAULT 'Actif'
+                  CHECK (statut IN ('Actif','Suspendu','Terminé')),
+  note            TEXT,
+  created_at      TIMESTAMPTZ DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_emplois_user          ON emplois(user_id);
+CREATE INDEX IF NOT EXISTS idx_contrats_clients_user ON contrats_clients(user_id);
+CREATE INDEX IF NOT EXISTS idx_contrats_paddy_user   ON contrats_paddy(user_id);
+
 CREATE TABLE IF NOT EXISTS audit_logs (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   actor_id    UUID REFERENCES users(id) ON DELETE SET NULL,

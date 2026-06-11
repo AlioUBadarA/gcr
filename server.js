@@ -52,6 +52,8 @@ app.use('/api/forecast',    require('./routes/forecast'));
 app.use('/api/prospection', require('./routes/prospection'));
 app.use('/api/actions',     require('./routes/actions'));
 app.use('/api/rentabilite', require('./routes/rentabilite'));
+app.use('/api/emplois',     require('./routes/emplois'));
+app.use('/api/contrats',    require('./routes/contrats'));
 
 // ── 404 ───────────────────────────────────────────────────────
 app.use((req, res) => {
