@@ -56,7 +56,7 @@ router.get('/stats', async (req, res) => {
 // GESTION DES UTILISATEURS
 // ══════════════════════════════════════════════════════════════
 
-// GET /api/admin/users — liste tous les utilisateurs avec leurs stats
+// GET /api/admin/users — liste les comptes riziers uniquement
 router.get('/users', async (req, res) => {
   try {
     const result = await pool.query(`
@@ -71,6 +71,7 @@ router.get('/users', async (req, res) => {
       FROM users u
       LEFT JOIN ventes  v ON v.user_id = u.id
       LEFT JOIN clients c ON c.user_id = u.id
+      WHERE u.role = 'rizier'
       GROUP BY u.id
       ORDER BY u.created_at DESC
     `);
@@ -81,10 +82,10 @@ router.get('/users', async (req, res) => {
   }
 });
 
-// GET /api/admin/users/:id — profil complet + ventes + clients
+// GET /api/admin/users/:id — profil complet + ventes + clients + équipe vendeurs
 router.get('/users/:id', async (req, res) => {
   try {
-    const [userR, ventesR, clientsR, pilotageR] = await Promise.all([
+    const [userR, ventesR, clientsR, pilotageR, vendeursR] = await Promise.all([
       pool.query(
         `SELECT id, nom, email, rizerie, telephone, ville, role,
                 suspended, suspended_reason, suspended_at, created_at
@@ -106,14 +107,26 @@ router.get('/users/:id', async (req, res) => {
          GROUP BY p.semaine ORDER BY p.semaine DESC LIMIT 8`,
         [req.params.id]
       ),
+      pool.query(
+        `SELECT u.id, u.nom, u.email, u.telephone, u.suspended, u.created_at,
+                COUNT(DISTINCT v.id) AS nb_ventes,
+                COALESCE(SUM(v.montant),0) AS ca_total,
+                MAX(v.date_vente) AS derniere_vente
+         FROM users u
+         LEFT JOIN ventes v ON v.user_id = u.id
+         WHERE u.parent_id = $1 AND u.role = 'vendeur'
+         GROUP BY u.id ORDER BY u.nom`,
+        [req.params.id]
+      ),
     ]);
     if (!userR.rows.length) return res.status(404).json({ error: 'Utilisateur non trouvé' });
 
     res.json({
-      user:     userR.rows[0],
-      ventes:   ventesR.rows,
-      clients:  clientsR.rows,
-      pilotage: pilotageR.rows,
+      user:      userR.rows[0],
+      ventes:    ventesR.rows,
+      clients:   clientsR.rows,
+      pilotage:  pilotageR.rows,
+      vendeurs:  vendeursR.rows,
     });
   } catch (err) {
     console.error('admin user detail:', err.message);
@@ -121,7 +134,40 @@ router.get('/users/:id', async (req, res) => {
   }
 });
 
-// POST /api/admin/users — créer un compte (support)
+// POST /api/admin/users/:id/vendeurs — créer un vendeur pour un rizier
+router.post('/users/:id/vendeurs', async (req, res) => {
+  try {
+    const rizierR = await pool.query(
+      `SELECT id, nom FROM users WHERE id=$1 AND role='rizier'`, [req.params.id]
+    );
+    if (!rizierR.rows.length) return res.status(404).json({ error: 'Rizier non trouvé' });
+
+    const { nom, email, password, telephone } = req.body;
+    if (!nom || !email || !password)
+      return res.status(400).json({ error: 'Nom, email et mot de passe requis' });
+    if (password.length < 6)
+      return res.status(400).json({ error: 'Mot de passe : 6 caractères minimum' });
+
+    const exists = await pool.query('SELECT id FROM users WHERE email=$1', [email.toLowerCase()]);
+    if (exists.rows.length) return res.status(409).json({ error: 'Cet email est déjà utilisé' });
+
+    const hash = await bcrypt.hash(password, 12);
+    const result = await pool.query(
+      `INSERT INTO users (nom, email, password, telephone, role, parent_id)
+       VALUES ($1,$2,$3,$4,'vendeur',$5)
+       RETURNING id, nom, email, telephone, role, created_at`,
+      [nom.trim(), email.toLowerCase().trim(), hash, telephone || null, req.params.id]
+    );
+    await log(req.userId, req.userNom, 'VENDEUR_CREATED',
+              result.rows[0], { rizier: rizierR.rows[0].nom, email }, req.ip);
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error('admin create vendeur:', err.message);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// POST /api/admin/users — créer un compte rizier
 router.post('/users', async (req, res) => {
   try {
     const { nom, email, password, rizerie, telephone, ville } = req.body;

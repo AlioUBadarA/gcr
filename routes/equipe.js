@@ -33,33 +33,6 @@ router.get('/', canManage, async (req, res) => {
   }
 });
 
-// POST /api/equipe — créer un vendeur
-router.post('/', canManage, async (req, res) => {
-  try {
-    const { nom, email, password, telephone } = req.body;
-    if (!nom || !email || !password)
-      return res.status(400).json({ error: 'Nom, email et mot de passe requis' });
-    if (password.length < 6)
-      return res.status(400).json({ error: 'Mot de passe : 6 caractères minimum' });
-
-    const exists = await pool.query('SELECT id FROM users WHERE email = $1', [email.toLowerCase()]);
-    if (exists.rows.length)
-      return res.status(409).json({ error: 'Cet email est déjà utilisé' });
-
-    const hash = await bcrypt.hash(password, 12);
-    const result = await pool.query(
-      `INSERT INTO users (nom, email, password, telephone, role, parent_id)
-       VALUES ($1,$2,$3,$4,'vendeur',$5)
-       RETURNING id, nom, email, telephone, role, created_at`,
-      [nom.trim(), email.toLowerCase().trim(), hash, telephone || null, req.userId]
-    );
-    res.status(201).json(result.rows[0]);
-  } catch (err) {
-    console.error('POST equipe:', err.message);
-    res.status(500).json({ error: 'Erreur serveur' });
-  }
-});
-
 // PUT /api/equipe/:id
 router.put('/:id', canManage, async (req, res) => {
   try {
