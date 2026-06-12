@@ -113,6 +113,15 @@ async function runMigrations() {
     `CREATE INDEX IF NOT EXISTS idx_emplois_user          ON emplois(user_id)`,
     `CREATE INDEX IF NOT EXISTS idx_contrats_clients_user ON contrats_clients(user_id)`,
     `CREATE INDEX IF NOT EXISTS idx_contrats_paddy_user   ON contrats_paddy(user_id)`,
+    `CREATE TABLE IF NOT EXISTS rizeries (
+       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+       nom VARCHAR(150) NOT NULL,
+       ville VARCHAR(80),
+       telephone VARCHAR(30),
+       created_at TIMESTAMPTZ DEFAULT NOW(),
+       updated_at TIMESTAMPTZ DEFAULT NOW()
+     )`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS rizerie_id UUID REFERENCES rizeries(id) ON DELETE SET NULL`,
   ];
 
   for (let i = 0; i < migrations.length; i++) {

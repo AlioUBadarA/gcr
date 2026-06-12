@@ -43,6 +43,18 @@ BEGIN
   EXCEPTION WHEN duplicate_object THEN NULL; END;
 END $$;
 
+-- ── RIZERIES (entités commerciales) ─────────────────────────
+CREATE TABLE IF NOT EXISTS rizeries (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  nom         VARCHAR(150) NOT NULL,
+  ville       VARCHAR(80),
+  telephone   VARCHAR(30),
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS rizerie_id UUID REFERENCES rizeries(id) ON DELETE SET NULL;
+
 -- forecast : objectifs mensuels
 CREATE TABLE IF NOT EXISTS forecast (
   id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),

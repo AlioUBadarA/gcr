@@ -53,6 +53,81 @@ router.get('/stats', async (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════════
+// GESTION DES RIZERIES
+// ══════════════════════════════════════════════════════════════
+
+// GET /api/admin/rizeries
+router.get('/rizeries', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT r.id, r.nom, r.ville, r.telephone, r.created_at,
+             COUNT(DISTINCT u.id)         AS nb_comptes,
+             COALESCE(SUM(v.montant), 0)  AS ca_total
+      FROM rizeries r
+      LEFT JOIN users  u ON u.rizerie_id = r.id AND u.role IN ('rizier','vendeur')
+      LEFT JOIN ventes v ON v.user_id = u.id
+      GROUP BY r.id
+      ORDER BY r.nom
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('GET rizeries:', err.message);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// POST /api/admin/rizeries
+router.post('/rizeries', async (req, res) => {
+  try {
+    const { nom, ville, telephone } = req.body;
+    if (!nom?.trim()) return res.status(400).json({ error: 'Nom de la rizerie requis' });
+    const exists = await pool.query('SELECT id FROM rizeries WHERE LOWER(nom)=LOWER($1)', [nom.trim()]);
+    if (exists.rows.length) return res.status(409).json({ error: 'Une rizerie avec ce nom existe déjà' });
+    const result = await pool.query(
+      `INSERT INTO rizeries (nom, ville, telephone) VALUES ($1,$2,$3) RETURNING *`,
+      [nom.trim(), ville || null, telephone || null]
+    );
+    await log(req.userId, req.userNom, 'RIZERIE_CREATED', result.rows[0], {}, req.ip);
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error('POST rizeries:', err.message);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// PUT /api/admin/rizeries/:id
+router.put('/rizeries/:id', async (req, res) => {
+  try {
+    const { nom, ville, telephone } = req.body;
+    if (!nom?.trim()) return res.status(400).json({ error: 'Nom requis' });
+    const result = await pool.query(
+      `UPDATE rizeries SET nom=$1, ville=$2, telephone=$3, updated_at=NOW()
+       WHERE id=$4 RETURNING *`,
+      [nom.trim(), ville || null, telephone || null, req.params.id]
+    );
+    if (!result.rows.length) return res.status(404).json({ error: 'Rizerie non trouvée' });
+    // Sync le champ texte rizerie sur les users liés
+    await pool.query(`UPDATE users SET rizerie=$1 WHERE rizerie_id=$2`, [nom.trim(), req.params.id]);
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// DELETE /api/admin/rizeries/:id
+router.delete('/rizeries/:id', async (req, res) => {
+  try {
+    const linked = await pool.query(`SELECT COUNT(*) FROM users WHERE rizerie_id=$1`, [req.params.id]);
+    if (Number(linked.rows[0].count) > 0)
+      return res.status(400).json({ error: 'Impossible : des comptes sont rattachés à cette rizerie' });
+    await pool.query('DELETE FROM rizeries WHERE id=$1', [req.params.id]);
+    res.json({ message: 'Rizerie supprimée' });
+  } catch (err) {
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════
 // GESTION DES UTILISATEURS
 // ══════════════════════════════════════════════════════════════
 
@@ -63,16 +138,18 @@ router.get('/users', async (req, res) => {
       SELECT
         u.id, u.nom, u.email, u.rizerie, u.telephone, u.ville,
         u.role, u.suspended, u.suspended_reason, u.suspended_at,
-        u.created_at,
+        u.created_at, u.rizerie_id,
+        r.nom AS rizerie_nom,
         COUNT(DISTINCT v.id)         AS nb_ventes,
         COUNT(DISTINCT c.id)         AS nb_clients,
         COALESCE(SUM(v.montant), 0)  AS ca_total,
         MAX(v.date_vente)            AS derniere_vente
       FROM users u
-      LEFT JOIN ventes  v ON v.user_id = u.id
-      LEFT JOIN clients c ON c.user_id = u.id
+      LEFT JOIN rizeries r ON r.id = u.rizerie_id
+      LEFT JOIN ventes   v ON v.user_id = u.id
+      LEFT JOIN clients  c ON c.user_id = u.id
       WHERE u.role = 'rizier'
-      GROUP BY u.id
+      GROUP BY u.id, r.nom
       ORDER BY u.created_at DESC
     `);
     res.json(result.rows);
@@ -170,25 +247,30 @@ router.post('/users/:id/vendeurs', async (req, res) => {
 // POST /api/admin/users — créer un compte rizier
 router.post('/users', async (req, res) => {
   try {
-    const { nom, email, password, rizerie, telephone, ville } = req.body;
+    const { nom, email, password, rizerie_id, telephone, ville } = req.body;
     if (!nom || !email || !password)
       return res.status(400).json({ error: 'Nom, email et mot de passe requis' });
     if (password.length < 6)
       return res.status(400).json({ error: 'Mot de passe : 6 caractères minimum' });
 
-    const exists = await pool.query(
-      'SELECT id FROM users WHERE email = $1', [email.toLowerCase()]
-    );
-    if (exists.rows.length)
-      return res.status(409).json({ error: 'Cet email est déjà utilisé' });
+    const exists = await pool.query('SELECT id FROM users WHERE email=$1', [email.toLowerCase()]);
+    if (exists.rows.length) return res.status(409).json({ error: 'Cet email est déjà utilisé' });
+
+    // Récupère le nom de la rizerie pour le champ texte
+    let rizeRieNom = null;
+    if (rizerie_id) {
+      const rR = await pool.query('SELECT nom FROM rizeries WHERE id=$1', [rizerie_id]);
+      if (!rR.rows.length) return res.status(400).json({ error: 'Rizerie introuvable' });
+      rizeRieNom = rR.rows[0].nom;
+    }
 
     const hash = await bcrypt.hash(password, 12);
     const result = await pool.query(
-      `INSERT INTO users (nom, email, password, rizerie, telephone, ville)
-       VALUES ($1,$2,$3,$4,$5,$6)
-       RETURNING id, nom, email, rizerie, telephone, ville, role, created_at`,
+      `INSERT INTO users (nom, email, password, rizerie, rizerie_id, telephone, ville)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
+       RETURNING id, nom, email, rizerie, rizerie_id, telephone, ville, role, created_at`,
       [nom.trim(), email.toLowerCase().trim(), hash,
-       rizerie || null, telephone || null, ville || null]
+       rizeRieNom, rizerie_id || null, telephone || null, ville || null]
     );
     await log(req.userId, req.userNom, 'ACCOUNT_CREATED_BY_ADMIN',
               result.rows[0], { email }, req.ip);
