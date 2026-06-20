@@ -1,7 +1,7 @@
 const express = require('express');
 const bcrypt  = require('bcryptjs');
 const jwt     = require('jsonwebtoken');
-const { pool } = require('../db/pool');
+const { pool, withTransaction, reassignVendeurData } = require('../db/pool');
 const auth    = require('../middleware/auth');
 const isAdmin = require('../middleware/isAdmin');
 
@@ -391,24 +391,14 @@ router.delete('/users/:id', async (req, res) => {
     if (!userR.rows.length) return res.status(404).json({ error: 'Utilisateur non trouvé' });
     const target = userR.rows[0];
 
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
+    await withTransaction(async (client) => {
       if (target.role === 'vendeur' && target.parent_id) {
-        await client.query('UPDATE ventes SET user_id=$1 WHERE user_id=$2', [target.parent_id, target.id]);
-        await client.query('UPDATE clients SET user_id=$1 WHERE user_id=$2', [target.parent_id, target.id]);
+        await reassignVendeurData(client, target.id, target.parent_id);
       }
       await client.query('DELETE FROM users WHERE id = $1', [target.id]);
-      await client.query('COMMIT');
-    } catch (err) {
-      await client.query('ROLLBACK');
-      throw err;
-    } finally {
-      client.release();
-    }
+    });
 
-    await log(req.userId, req.userNom, 'ACCOUNT_DELETED',
-              { id: target.id, nom: target.nom }, { email: target.email }, req.ip);
+    await log(req.userId, req.userNom, 'ACCOUNT_DELETED', target, { email: target.email }, req.ip);
     res.json({ message: 'Compte supprimé définitivement' });
   } catch (err) {
     console.error('admin delete user:', err.message);

@@ -167,4 +167,27 @@ async function runMigrations() {
   }
 }
 
-module.exports = { pool, initSchema, runMigrations };
+// Exécute fn(client) dans une transaction : BEGIN, COMMIT si succès, ROLLBACK si erreur.
+async function withTransaction(fn) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+// Rattache les ventes/clients d'un vendeur supprimé à son rizier parent,
+// pour ne pas perdre l'historique commercial (au lieu du cascade delete).
+async function reassignVendeurData(client, vendeurId, parentId) {
+  await client.query('UPDATE ventes SET user_id=$1 WHERE user_id=$2', [parentId, vendeurId]);
+  await client.query('UPDATE clients SET user_id=$1 WHERE user_id=$2', [parentId, vendeurId]);
+}
+
+module.exports = { pool, initSchema, runMigrations, withTransaction, reassignVendeurData };

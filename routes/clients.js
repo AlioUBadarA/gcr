@@ -1,10 +1,10 @@
 const express = require('express');
 const { pool } = require('../db/pool');
 const auth = require('../middleware/auth');
-const { getScopeIds } = require('../middleware/scope');
+const { attachScopeIds } = require('../middleware/scope');
 
 const router = express.Router();
-router.use(auth);
+router.use(auth, attachScopeIds);
 
 const TYPES_VALIDES = ['Grossiste','Detaillant marche','Boutique','Restauration','Cantine/Institution'];
 const STATUTS_VALIDES = ['Actif','Prospect','Dormant'];
@@ -13,7 +13,7 @@ const STATUTS_VALIDES = ['Actif','Prospect','Dormant'];
 router.get('/', async (req, res) => {
   try {
     const { statut, type, search } = req.query;
-    const ids = await getScopeIds(req.userId, req.userRole);
+    const ids = req.scopeIds;
     let q = `SELECT c.*, u.nom AS vendeur_nom
              FROM clients c
              LEFT JOIN users u ON u.id = c.user_id
@@ -61,7 +61,7 @@ router.post('/', async (req, res) => {
 // GET /api/clients/:id
 router.get('/:id', async (req, res) => {
   try {
-    const ids = await getScopeIds(req.userId, req.userRole);
+    const ids = req.scopeIds;
     const result = await pool.query(
       'SELECT * FROM clients WHERE id = $1 AND user_id = ANY($2::uuid[])',
       [req.params.id, ids]
@@ -80,7 +80,7 @@ router.put('/:id', async (req, res) => {
     if (type && !TYPES_VALIDES.includes(type)) return res.status(400).json({ error: 'Type invalide' });
     if (statut && !STATUTS_VALIDES.includes(statut)) return res.status(400).json({ error: 'Statut invalide' });
 
-    const ids = await getScopeIds(req.userId, req.userRole);
+    const ids = req.scopeIds;
     const result = await pool.query(
       `UPDATE clients SET
          nom=$1, type=$2, statut=$3, zone=$4, telephone=$5,
@@ -102,7 +102,7 @@ router.patch('/:id/statut', async (req, res) => {
   try {
     const { statut } = req.body;
     if (!STATUTS_VALIDES.includes(statut)) return res.status(400).json({ error: 'Statut invalide' });
-    const ids = await getScopeIds(req.userId, req.userRole);
+    const ids = req.scopeIds;
     const result = await pool.query(
       'UPDATE clients SET statut=$1 WHERE id=$2 AND user_id = ANY($3::uuid[]) RETURNING *',
       [statut, req.params.id, ids]
@@ -117,7 +117,7 @@ router.patch('/:id/statut', async (req, res) => {
 // DELETE /api/clients/:id
 router.delete('/:id', async (req, res) => {
   try {
-    const ids = await getScopeIds(req.userId, req.userRole);
+    const ids = req.scopeIds;
     const result = await pool.query(
       'DELETE FROM clients WHERE id=$1 AND user_id = ANY($2::uuid[]) RETURNING id',
       [req.params.id, ids]

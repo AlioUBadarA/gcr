@@ -1,10 +1,10 @@
 const express = require('express');
 const { pool } = require('../db/pool');
 const auth = require('../middleware/auth');
-const { getScopeIds } = require('../middleware/scope');
+const { attachScopeIds } = require('../middleware/scope');
 
 const router = express.Router();
-router.use(auth);
+router.use(auth, attachScopeIds);
 
 const STATUTS = ['Paye','En cours','En retard'];
 
@@ -12,7 +12,7 @@ const STATUTS = ['Paye','En cours','En retard'];
 router.get('/', async (req, res) => {
   try {
     const { mois, annee, statut, client_id, limit = 200, offset = 0 } = req.query;
-    const ids = await getScopeIds(req.userId, req.userRole);
+    const ids = req.scopeIds;
     let q = `SELECT v.*, c.type as client_type, u.nom as vendeur_nom
              FROM ventes v
              LEFT JOIN clients c ON v.client_id = c.id
@@ -80,7 +80,7 @@ router.post('/', async (req, res) => {
 // GET /api/ventes/:id
 router.get('/:id', async (req, res) => {
   try {
-    const ids = await getScopeIds(req.userId, req.userRole);
+    const ids = req.scopeIds;
     const result = await pool.query(
       'SELECT * FROM ventes WHERE id=$1 AND user_id = ANY($2::uuid[])',
       [req.params.id, ids]
@@ -99,7 +99,7 @@ router.put('/:id', async (req, res) => {
     if (statut_paiement && !STATUTS.includes(statut_paiement))
       return res.status(400).json({ error: 'Statut invalide' });
 
-    const ids = await getScopeIds(req.userId, req.userRole);
+    const ids = req.scopeIds;
     const result = await pool.query(
       `UPDATE ventes SET
          client_id=$1, client_nom=$2, date_vente=$3, produit=$4,
@@ -124,7 +124,7 @@ router.patch('/:id/statut', async (req, res) => {
     const { statut_paiement } = req.body;
     if (!STATUTS.includes(statut_paiement))
       return res.status(400).json({ error: 'Statut invalide' });
-    const ids = await getScopeIds(req.userId, req.userRole);
+    const ids = req.scopeIds;
     const result = await pool.query(
       'UPDATE ventes SET statut_paiement=$1 WHERE id=$2 AND user_id = ANY($3::uuid[]) RETURNING *',
       [statut_paiement, req.params.id, ids]
@@ -139,7 +139,7 @@ router.patch('/:id/statut', async (req, res) => {
 // DELETE /api/ventes/:id
 router.delete('/:id', async (req, res) => {
   try {
-    const ids = await getScopeIds(req.userId, req.userRole);
+    const ids = req.scopeIds;
     const result = await pool.query(
       'DELETE FROM ventes WHERE id=$1 AND user_id = ANY($2::uuid[]) RETURNING id',
       [req.params.id, ids]

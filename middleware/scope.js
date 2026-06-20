@@ -9,4 +9,15 @@ async function getScopeIds(userId, role) {
   return [userId, ...r.rows.map(x => x.id)];
 }
 
-module.exports = { getScopeIds };
+// Middleware : résout le scope une fois par requête et l'attache à req.scopeIds,
+// pour qu'aucune route /:id ne puisse oublier de l'appliquer (cf. bug clients/ventes).
+async function attachScopeIds(req, res, next) {
+  try {
+    req.scopeIds = await getScopeIds(req.userId, req.userRole);
+    next();
+  } catch (err) {
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+}
+
+module.exports = { getScopeIds, attachScopeIds };
