@@ -71,16 +71,30 @@ router.patch('/:id/password', canManage, async (req, res) => {
 });
 
 // DELETE /api/equipe/:id
+// Rattache les ventes/clients du vendeur au rizier avant suppression, pour ne pas perdre l'historique.
 router.delete('/:id', canManage, async (req, res) => {
+  const client = await pool.connect();
   try {
-    const result = await pool.query(
-      `DELETE FROM users WHERE id=$1 AND parent_id=$2 AND role='vendeur' RETURNING id`,
+    await client.query('BEGIN');
+    const v = await client.query(
+      `SELECT id FROM users WHERE id=$1 AND parent_id=$2 AND role='vendeur'`,
       [req.params.id, req.userId]
     );
-    if (!result.rows.length) return res.status(404).json({ error: 'Vendeur non trouvé' });
+    if (!v.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Vendeur non trouvé' });
+    }
+    await client.query('UPDATE ventes SET user_id=$1 WHERE user_id=$2', [req.userId, req.params.id]);
+    await client.query('UPDATE clients SET user_id=$1 WHERE user_id=$2', [req.userId, req.params.id]);
+    await client.query('DELETE FROM users WHERE id=$1', [req.params.id]);
+    await client.query('COMMIT');
     res.json({ message: 'Vendeur supprimé' });
   } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('DELETE equipe:', err.message);
     res.status(500).json({ error: 'Erreur serveur' });
+  } finally {
+    client.release();
   }
 });
 

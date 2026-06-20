@@ -564,17 +564,25 @@ function renderAlertes(){
   el.innerHTML=alerts.length?alerts.join(''):'<div class="empty" style="padding:16px"><i class="ti ti-circle-check" aria-hidden="true"></i>Aucune alerte</div>'
 }
 
+const MOIS_NOMS=['Janvier','Fevrier','Mars','Avril','Mai','Juin','Juillet','Aout','Septembre','Octobre','Novembre','Decembre'];
 function renderVentes(){
   const mf=document.getElementById('filter-mois-v').value;
   const tf=document.getElementById('filter-type-v').value;
   const sf=document.getElementById('filter-statut-v').value;
-  let filtered=ventes.filter(v=>
-    (!tf||v.typeClient===tf)&&
-    (!sf||v.statut===sf)
-  );
+  let filtered=ventes.filter(v=>{
+    if(tf&&v.typeClient!==tf)return false;
+    if(sf&&v.statut!==sf)return false;
+    if(mf){
+      const [nomMois,anneeStr]=mf.split(' ');
+      const d=new Date(v.date);
+      if(d.getMonth()!==MOIS_NOMS.indexOf(nomMois)||d.getFullYear()!==+anneeStr)return false;
+    }
+    return true;
+  });
   const tbody=document.getElementById('tbody-ventes');
   if(!filtered.length){tbody.innerHTML='<tr><td colspan="8"><div class="empty"><i class="ti ti-receipt" aria-hidden="true"></i>Aucune vente</div></td></tr>';return}
-  tbody.innerHTML=filtered.map((v,i)=>{
+  tbody.innerHTML=filtered.map((v)=>{
+    const realIdx=ventes.indexOf(v);
     const mt=v.qte*v.prix;
     const sb=v.statut==='Paye'?'badge-green':v.statut==='En retard'?'badge-red':'badge-amber';
     return `<tr>
@@ -586,12 +594,12 @@ function renderVentes(){
       <td style="font-weight:500">${fmtF(mt)}</td>
       <td><span class="badge ${sb}">${v.statut}</span></td>
       <td>
-        <select style="font-size:11px;padding:3px 6px;border:0.5px solid var(--color-border-secondary);border-radius:var(--border-radius-md);background:var(--color-background-primary);color:var(--color-text-primary)" onchange="updateStatut(${i},this.value)">
+        <select style="font-size:11px;padding:3px 6px;border:0.5px solid var(--color-border-secondary);border-radius:var(--border-radius-md);background:var(--color-background-primary);color:var(--color-text-primary)" onchange="updateStatut(${realIdx},this.value)">
           <option ${v.statut==='Paye'?'selected':''}>Paye</option>
           <option ${v.statut==='En cours'?'selected':''}>En cours</option>
           <option ${v.statut==='En retard'?'selected':''}>En retard</option>
         </select>
-        <button class="btn btn-sm" style="margin-left:4px;color:var(--red);border-color:var(--red)" onclick="deleteVente(${i})"><i class="ti ti-trash" aria-hidden="true"></i></button>
+        <button class="btn btn-sm" style="margin-left:4px;color:var(--red);border-color:var(--red)" onclick="deleteVente(${realIdx})"><i class="ti ti-trash" aria-hidden="true"></i></button>
       </td>
     </tr>`
   }).join('')

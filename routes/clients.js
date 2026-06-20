@@ -61,9 +61,10 @@ router.post('/', async (req, res) => {
 // GET /api/clients/:id
 router.get('/:id', async (req, res) => {
   try {
+    const ids = await getScopeIds(req.userId, req.userRole);
     const result = await pool.query(
-      'SELECT * FROM clients WHERE id = $1 AND user_id = $2',
-      [req.params.id, req.userId]
+      'SELECT * FROM clients WHERE id = $1 AND user_id = ANY($2::uuid[])',
+      [req.params.id, ids]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Client non trouve' });
     res.json(result.rows[0]);
@@ -79,14 +80,15 @@ router.put('/:id', async (req, res) => {
     if (type && !TYPES_VALIDES.includes(type)) return res.status(400).json({ error: 'Type invalide' });
     if (statut && !STATUTS_VALIDES.includes(statut)) return res.status(400).json({ error: 'Statut invalide' });
 
+    const ids = await getScopeIds(req.userId, req.userRole);
     const result = await pool.query(
       `UPDATE clients SET
          nom=$1, type=$2, statut=$3, zone=$4, telephone=$5,
          volume_estime=$6, frequence=$7, valorise=$8, horaire=$9, note=$10
-       WHERE id=$11 AND user_id=$12 RETURNING *`,
+       WHERE id=$11 AND user_id = ANY($12::uuid[]) RETURNING *`,
       [nom, type, statut, zone || null, telephone || null,
        volume_estime || 0, frequence || null, valorise || null, horaire || null, note || null,
-       req.params.id, req.userId]
+       req.params.id, ids]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Client non trouve' });
     res.json(result.rows[0]);
@@ -100,9 +102,10 @@ router.patch('/:id/statut', async (req, res) => {
   try {
     const { statut } = req.body;
     if (!STATUTS_VALIDES.includes(statut)) return res.status(400).json({ error: 'Statut invalide' });
+    const ids = await getScopeIds(req.userId, req.userRole);
     const result = await pool.query(
-      'UPDATE clients SET statut=$1 WHERE id=$2 AND user_id=$3 RETURNING *',
-      [statut, req.params.id, req.userId]
+      'UPDATE clients SET statut=$1 WHERE id=$2 AND user_id = ANY($3::uuid[]) RETURNING *',
+      [statut, req.params.id, ids]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Client non trouve' });
     res.json(result.rows[0]);
@@ -114,9 +117,10 @@ router.patch('/:id/statut', async (req, res) => {
 // DELETE /api/clients/:id
 router.delete('/:id', async (req, res) => {
   try {
+    const ids = await getScopeIds(req.userId, req.userRole);
     const result = await pool.query(
-      'DELETE FROM clients WHERE id=$1 AND user_id=$2 RETURNING id',
-      [req.params.id, req.userId]
+      'DELETE FROM clients WHERE id=$1 AND user_id = ANY($2::uuid[]) RETURNING id',
+      [req.params.id, ids]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Client non trouve' });
     res.json({ message: 'Client supprime' });
