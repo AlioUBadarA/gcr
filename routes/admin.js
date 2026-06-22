@@ -4,6 +4,7 @@ const jwt     = require('jsonwebtoken');
 const { pool, withTransaction, reassignVendeurData } = require('../db/pool');
 const auth    = require('../middleware/auth');
 const isAdmin = require('../middleware/isAdmin');
+const { requireSuperadmin } = isAdmin;
 
 const router = express.Router();
 router.use(auth, isAdmin);
@@ -60,7 +61,7 @@ router.get('/stats', async (req, res) => {
 router.get('/rizeries', async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT r.id, r.nom, r.ville, r.telephone, r.created_at,
+      SELECT r.id, r.nom, r.pays, r.region, r.ville, r.telephone, r.created_at,
              COUNT(DISTINCT u.id)         AS nb_comptes,
              COALESCE(SUM(v.montant), 0)  AS ca_total
       FROM rizeries r
@@ -79,13 +80,13 @@ router.get('/rizeries', async (req, res) => {
 // POST /api/admin/rizeries
 router.post('/rizeries', async (req, res) => {
   try {
-    const { nom, ville, telephone } = req.body;
+    const { nom, pays, region, ville, telephone } = req.body;
     if (!nom?.trim()) return res.status(400).json({ error: 'Nom de la rizerie requis' });
     const exists = await pool.query('SELECT id FROM rizeries WHERE LOWER(nom)=LOWER($1)', [nom.trim()]);
     if (exists.rows.length) return res.status(409).json({ error: 'Une rizerie avec ce nom existe déjà' });
     const result = await pool.query(
-      `INSERT INTO rizeries (nom, ville, telephone) VALUES ($1,$2,$3) RETURNING *`,
-      [nom.trim(), ville || null, telephone || null]
+      `INSERT INTO rizeries (nom, pays, region, ville, telephone) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+      [nom.trim(), pays || null, region || null, ville || null, telephone || null]
     );
     await log(req.userId, req.userNom, 'RIZERIE_CREATED', result.rows[0], {}, req.ip);
     res.status(201).json(result.rows[0]);
@@ -98,12 +99,12 @@ router.post('/rizeries', async (req, res) => {
 // PUT /api/admin/rizeries/:id
 router.put('/rizeries/:id', async (req, res) => {
   try {
-    const { nom, ville, telephone } = req.body;
+    const { nom, pays, region, ville, telephone } = req.body;
     if (!nom?.trim()) return res.status(400).json({ error: 'Nom requis' });
     const result = await pool.query(
-      `UPDATE rizeries SET nom=$1, ville=$2, telephone=$3, updated_at=NOW()
-       WHERE id=$4 RETURNING *`,
-      [nom.trim(), ville || null, telephone || null, req.params.id]
+      `UPDATE rizeries SET nom=$1, pays=$2, region=$3, ville=$4, telephone=$5, updated_at=NOW()
+       WHERE id=$6 RETURNING *`,
+      [nom.trim(), pays || null, region || null, ville || null, telephone || null, req.params.id]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Rizerie non trouvée' });
     // Sync le champ texte rizerie sur les users liés
@@ -402,6 +403,70 @@ router.delete('/users/:id', async (req, res) => {
     res.json({ message: 'Compte supprimé définitivement' });
   } catch (err) {
     console.error('admin delete user:', err.message);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════
+// COMPTES SUPPORT — accès admin complet, mais seul le vrai superadmin
+// peut en créer ou en supprimer (pas un autre compte support).
+// ══════════════════════════════════════════════════════════════
+
+// GET /api/admin/support
+router.get('/support', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, nom, email, created_at FROM users WHERE role = 'support' ORDER BY created_at DESC`
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error('GET support:', err.message);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// POST /api/admin/support
+router.post('/support', requireSuperadmin, async (req, res) => {
+  try {
+    const { nom, email, password } = req.body;
+    if (!nom || !email || !password)
+      return res.status(400).json({ error: 'Nom, email et mot de passe requis' });
+    if (password.length < 6)
+      return res.status(400).json({ error: 'Mot de passe : 6 caractères minimum' });
+
+    const exists = await pool.query('SELECT id FROM users WHERE email=$1', [email.toLowerCase()]);
+    if (exists.rows.length) return res.status(409).json({ error: 'Cet email est déjà utilisé' });
+
+    const hash = await bcrypt.hash(password, 12);
+    const result = await pool.query(
+      `INSERT INTO users (nom, email, password, role)
+       VALUES ($1,$2,$3,'support')
+       RETURNING id, nom, email, created_at`,
+      [nom.trim(), email.toLowerCase().trim(), hash]
+    );
+    await log(req.userId, req.userNom, 'SUPPORT_CREATED', result.rows[0], { email }, req.ip);
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error('POST support:', err.message);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// DELETE /api/admin/support/:id
+router.delete('/support/:id', requireSuperadmin, async (req, res) => {
+  try {
+    if (req.params.id === req.userId)
+      return res.status(400).json({ error: 'Impossible de supprimer son propre compte' });
+
+    const result = await pool.query(
+      `DELETE FROM users WHERE id=$1 AND role='support' RETURNING id, nom, email`
+    , [req.params.id]);
+    if (!result.rows.length) return res.status(404).json({ error: 'Compte support non trouvé' });
+
+    await log(req.userId, req.userNom, 'SUPPORT_DELETED', result.rows[0], { email: result.rows[0].email }, req.ip);
+    res.json({ message: 'Compte support supprimé' });
+  } catch (err) {
+    console.error('DELETE support:', err.message);
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });

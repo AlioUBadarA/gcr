@@ -122,6 +122,21 @@ async function runMigrations() {
        updated_at TIMESTAMPTZ DEFAULT NOW()
      )`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS rizerie_id UUID REFERENCES rizeries(id) ON DELETE SET NULL`,
+    `ALTER TABLE prospection ADD COLUMN IF NOT EXISTS valeur_estimee NUMERIC(14,2) DEFAULT 0`,
+    `ALTER TABLE rizeries ADD COLUMN IF NOT EXISTS pays VARCHAR(80)`,
+    `ALTER TABLE rizeries ADD COLUMN IF NOT EXISTS region VARCHAR(100)`,
+    `DO $$
+     DECLARE c TEXT;
+     BEGIN
+       SELECT conname INTO c FROM pg_constraint
+       WHERE conrelid = 'users'::regclass AND contype = 'c'
+         AND pg_get_constraintdef(oid) LIKE '%role%' LIMIT 1;
+       IF c IS NOT NULL THEN EXECUTE format('ALTER TABLE users DROP CONSTRAINT %I', c); END IF;
+       BEGIN
+         ALTER TABLE users ADD CONSTRAINT users_role_check
+           CHECK (role IN ('rizier','superadmin','vendeur','support'));
+       EXCEPTION WHEN duplicate_object THEN NULL; END;
+     END $$`,
   ];
 
   for (let i = 0; i < migrations.length; i++) {

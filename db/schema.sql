@@ -29,7 +29,7 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS suspended_at     TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS suspended_reason TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS parent_id        UUID REFERENCES users(id) ON DELETE SET NULL;
 
--- Étend la contrainte role pour inclure vendeur
+-- Étend la contrainte role pour inclure vendeur, puis support
 DO $$
 DECLARE c TEXT;
 BEGIN
@@ -39,7 +39,7 @@ BEGIN
   IF c IS NOT NULL THEN EXECUTE format('ALTER TABLE users DROP CONSTRAINT %I', c); END IF;
   BEGIN
     ALTER TABLE users ADD CONSTRAINT users_role_check
-      CHECK (role IN ('rizier','superadmin','vendeur'));
+      CHECK (role IN ('rizier','superadmin','vendeur','support'));
   EXCEPTION WHEN duplicate_object THEN NULL; END;
 END $$;
 
@@ -47,6 +47,8 @@ END $$;
 CREATE TABLE IF NOT EXISTS rizeries (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   nom         VARCHAR(150) NOT NULL,
+  pays        VARCHAR(80),
+  region      VARCHAR(100),
   ville       VARCHAR(80),
   telephone   VARCHAR(30),
   created_at  TIMESTAMPTZ DEFAULT NOW(),
@@ -82,6 +84,7 @@ CREATE TABLE IF NOT EXISTS prospection (
                CHECK (priorite IN ('Haute','Normale','Basse')),
   date_contact DATE,
   note         TEXT,
+  valeur_estimee NUMERIC(14,2) DEFAULT 0,
   created_at   TIMESTAMPTZ DEFAULT NOW(),
   updated_at   TIMESTAMPTZ DEFAULT NOW()
 );

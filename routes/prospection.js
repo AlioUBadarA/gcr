@@ -34,13 +34,13 @@ router.get('/', async (req, res) => {
 // POST /api/prospection
 router.post('/', async (req, res) => {
   try {
-    const { nom, type_client, zone, telephone, statut, priorite, date_contact, note } = req.body;
+    const { nom, type_client, zone, telephone, statut, priorite, date_contact, note, valeur_estimee } = req.body;
     if (!nom) return res.status(400).json({ error: 'Nom requis' });
     const result = await pool.query(
-      `INSERT INTO prospection (user_id, nom, type_client, zone, telephone, statut, priorite, date_contact, note)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+      `INSERT INTO prospection (user_id, nom, type_client, zone, telephone, statut, priorite, date_contact, note, valeur_estimee)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
       [req.userId, nom.trim(), type_client || null, zone || null, telephone || null,
-       statut || 'Nouveau', priorite || 'Normale', date_contact || null, note || null]
+       statut || 'Nouveau', priorite || 'Normale', date_contact || null, note || null, +valeur_estimee || 0]
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
@@ -52,16 +52,16 @@ router.post('/', async (req, res) => {
 // PUT /api/prospection/:id
 router.put('/:id', async (req, res) => {
   try {
-    const { nom, type_client, zone, telephone, statut, priorite, date_contact, note } = req.body;
+    const { nom, type_client, zone, telephone, statut, priorite, date_contact, note, valeur_estimee } = req.body;
     if (statut && !STATUTS.includes(statut))
       return res.status(400).json({ error: 'Statut invalide' });
     const ids = await getScopeIds(req.userId, req.userRole);
     const result = await pool.query(
       `UPDATE prospection SET nom=$1, type_client=$2, zone=$3, telephone=$4,
-         statut=$5, priorite=$6, date_contact=$7, note=$8
-       WHERE id=$9 AND user_id = ANY($10::uuid[]) RETURNING *`,
+         statut=$5, priorite=$6, date_contact=$7, note=$8, valeur_estimee=$9
+       WHERE id=$10 AND user_id = ANY($11::uuid[]) RETURNING *`,
       [nom, type_client || null, zone || null, telephone || null,
-       statut, priorite || 'Normale', date_contact || null, note || null,
+       statut, priorite || 'Normale', date_contact || null, note || null, +valeur_estimee || 0,
        req.params.id, ids]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Prospect non trouvé' });
