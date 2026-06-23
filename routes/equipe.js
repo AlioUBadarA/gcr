@@ -13,23 +13,56 @@ function canManage(req, res, next) {
   next();
 }
 
-// GET /api/equipe — tous les commerciaux du périmètre (directs + sous chaque manager)
+// GET /api/equipe — tous les commerciaux du périmètre (directs + sous chaque manager),
+// avec objectif/réalisé/écart/atteinte/projection/marge à l'identique du HTML de référence.
 router.get('/', canManage, attachScopeIds, async (req, res) => {
   try {
-    const result = await pool.query(`
-      SELECT u.id, u.nom, u.email, u.telephone, u.suspended, u.created_at, u.parent_id,
-             m.nom AS manager_nom,
-             COUNT(DISTINCT v.id)        AS nb_ventes,
-             COALESCE(SUM(v.montant), 0) AS ca_total,
-             MAX(v.date_vente)           AS derniere_vente
-      FROM users u
-      LEFT JOIN users m ON m.id = u.parent_id AND m.role = 'manager'
-      LEFT JOIN ventes v ON v.user_id = u.id
-      WHERE u.id = ANY($1::uuid[]) AND u.role = 'vendeur'
-      GROUP BY u.id, m.nom
-      ORDER BY u.nom
-    `, [req.scopeIds]);
-    res.json(result.rows);
+    const annee = new Date().getFullYear();
+    const monthsElapsed = new Date().getMonth() + 1;
+
+    const [baseR, forecastR] = await Promise.all([
+      pool.query(`
+        SELECT u.id, u.nom, u.email, u.telephone, u.suspended, u.created_at, u.parent_id,
+               m.nom AS manager_nom,
+               COUNT(DISTINCT v.id) FILTER (WHERE EXTRACT(YEAR FROM v.date_vente)=$2) AS nb_ventes,
+               COUNT(DISTINCT v.client_id)                                            AS nb_clients,
+               COALESCE(SUM(v.montant) FILTER (WHERE EXTRACT(YEAR FROM v.date_vente)=$2), 0) AS ca_ytd,
+               COALESCE(SUM(v.quantite*COALESCE(NULLIF(v.cout_unitaire,0),0)) FILTER (WHERE EXTRACT(YEAR FROM v.date_vente)=$2), 0) AS cout_ytd,
+               COALESCE(SUM(v.montant) FILTER (WHERE v.statut_paiement != 'Paye'), 0) AS creances,
+               MAX(v.date_vente) AS derniere_vente
+        FROM users u
+        LEFT JOIN users m ON m.id = u.parent_id AND m.role = 'manager'
+        LEFT JOIN ventes v ON v.user_id = u.id
+        WHERE u.id = ANY($1::uuid[]) AND u.role = 'vendeur'
+        GROUP BY u.id, m.nom
+        ORDER BY u.nom
+      `, [req.scopeIds, annee]),
+      pool.query(`
+        SELECT user_id, COALESCE(SUM(objectif_montant),0) AS obj
+        FROM forecast WHERE user_id = ANY($1::uuid[]) AND annee=$2
+        GROUP BY user_id
+      `, [req.scopeIds, annee]),
+    ]);
+
+    const objMap = {}; forecastR.rows.forEach(r => { objMap[r.user_id] = +r.obj; });
+
+    const result = baseR.rows.map(r => {
+      const ca = +r.ca_ytd;
+      const cout = +r.cout_ytd;
+      const objAnnuel = objMap[r.id] || 0;
+      const marge = ca - cout;
+      const prorat = objAnnuel / 12 * monthsElapsed;
+      const tauxAtteinte = prorat > 0 ? ca / prorat * 100 : 0;
+      const forecast = Math.round(ca / monthsElapsed * 12);
+      return {
+        ...r,
+        nb_ventes: +r.nb_ventes, nb_clients: +r.nb_clients, ca_total: ca, creances: +r.creances,
+        objectif_mensuel: Math.round(objAnnuel / 12), objectif_annuel: objAnnuel,
+        ecart: ca - prorat, taux_atteinte: tauxAtteinte, forecast, marge,
+      };
+    });
+
+    res.json(result);
   } catch (err) {
     console.error('GET equipe:', err.message);
     res.status(500).json({ error: 'Erreur serveur' });
@@ -116,22 +149,32 @@ router.patch('/:id/password', canManage, attachScopeIds, async (req, res) => {
 
 // DELETE /api/equipe/:id
 // Rattache les ventes/clients du vendeur à son rattachement direct (manager ou rizier) avant
-// suppression, pour ne pas perdre l'historique.
+// suppression, pour ne pas perdre l'historique. Un manager se supprime aussi : ses vendeurs
+// sont alors remontés directement sous le rizier.
 router.delete('/:id', canManage, attachScopeIds, async (req, res) => {
   try {
     const found = await withTransaction(async (client) => {
-      const v = await client.query(
-        `SELECT id, parent_id FROM users WHERE id=$1 AND id = ANY($2::uuid[]) AND role='vendeur'`,
+      const target = await client.query(
+        `SELECT id, role, parent_id FROM users WHERE id=$1 AND id = ANY($2::uuid[]) AND role IN ('vendeur','manager')`,
         [req.params.id, req.scopeIds]
       );
-      if (!v.rows.length) return false;
-      await reassignVendeurData(client, req.params.id, v.rows[0].parent_id);
-      await client.query('DELETE FROM users WHERE id=$1', [req.params.id]);
+      if (!target.rows.length) return false;
+      const t = target.rows[0];
+
+      if (t.role === 'vendeur') {
+        await reassignVendeurData(client, t.id, t.parent_id);
+      } else if (req.userRole !== 'rizier') {
+        throw Object.assign(new Error('Seul le rizier peut supprimer un manager'), { status: 403 });
+      } else {
+        await client.query(`UPDATE users SET parent_id=$1 WHERE parent_id=$2 AND role='vendeur'`, [t.parent_id, t.id]);
+      }
+      await client.query('DELETE FROM users WHERE id=$1', [t.id]);
       return true;
     });
-    if (!found) return res.status(404).json({ error: 'Vendeur non trouvé' });
-    res.json({ message: 'Vendeur supprimé' });
+    if (!found) return res.status(404).json({ error: 'Compte non trouvé' });
+    res.json({ message: 'Compte supprimé' });
   } catch (err) {
+    if (err.status === 403) return res.status(403).json({ error: err.message });
     console.error('DELETE equipe:', err.message);
     res.status(500).json({ error: 'Erreur serveur' });
   }
