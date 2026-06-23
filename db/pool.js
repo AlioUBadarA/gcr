@@ -230,6 +230,39 @@ async function runMigrations() {
        created_at TIMESTAMPTZ DEFAULT NOW()
      )`,
     `CREATE INDEX IF NOT EXISTS idx_pilotage_visites_user ON pilotage_visites(user_id, semaine, jour)`,
+    `ALTER TABLE clients ADD COLUMN IF NOT EXISTS produits_interet TEXT[] DEFAULT '{}'`,
+    `ALTER TABLE ventes           ADD COLUMN IF NOT EXISTS numero VARCHAR(20)`,
+    `ALTER TABLE contrats_clients ADD COLUMN IF NOT EXISTS numero VARCHAR(20)`,
+    `ALTER TABLE contrats_paddy   ADD COLUMN IF NOT EXISTS numero VARCHAR(20)`,
+    `WITH numbered AS (
+       SELECT id, 'V-' || EXTRACT(YEAR FROM created_at)::INT || '-' ||
+              LPAD(ROW_NUMBER() OVER (PARTITION BY user_id, EXTRACT(YEAR FROM created_at) ORDER BY created_at)::TEXT, 4, '0') AS num
+       FROM ventes WHERE numero IS NULL
+     )
+     UPDATE ventes v SET numero = n.num FROM numbered n WHERE v.id = n.id`,
+    `WITH numbered AS (
+       SELECT id, 'CC-' || EXTRACT(YEAR FROM created_at)::INT || '-' ||
+              LPAD(ROW_NUMBER() OVER (PARTITION BY user_id, EXTRACT(YEAR FROM created_at) ORDER BY created_at)::TEXT, 4, '0') AS num
+       FROM contrats_clients WHERE numero IS NULL
+     )
+     UPDATE contrats_clients c SET numero = n.num FROM numbered n WHERE c.id = n.id`,
+    `WITH numbered AS (
+       SELECT id, 'CP-' || EXTRACT(YEAR FROM created_at)::INT || '-' ||
+              LPAD(ROW_NUMBER() OVER (PARTITION BY user_id, EXTRACT(YEAR FROM created_at) ORDER BY created_at)::TEXT, 4, '0') AS num
+       FROM contrats_paddy WHERE numero IS NULL
+     )
+     UPDATE contrats_paddy c SET numero = n.num FROM numbered n WHERE c.id = n.id`,
+    `ALTER TABLE versements ALTER COLUMN vente_id DROP NOT NULL`,
+    `ALTER TABLE versements ADD COLUMN IF NOT EXISTS contrat_client_id UUID REFERENCES contrats_clients(id) ON DELETE CASCADE`,
+    `DO $$ BEGIN
+       ALTER TABLE versements ADD CONSTRAINT versements_one_target_check
+         CHECK (num_nonnulls(vente_id, contrat_client_id) = 1);
+     EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
+    `CREATE INDEX IF NOT EXISTS idx_versements_contrat_client ON versements(contrat_client_id)`,
+    `ALTER TABLE rizeries ADD COLUMN IF NOT EXISTS emplois_baseline INT DEFAULT 0`,
+    `ALTER TABLE rizeries ADD COLUMN IF NOT EXISTS masse_salariale_baseline NUMERIC(14,2) DEFAULT 0`,
+    `ALTER TABLE rizeries ADD COLUMN IF NOT EXISTS ca_baseline NUMERIC(14,2) DEFAULT 0`,
+    `ALTER TABLE rizeries ADD COLUMN IF NOT EXISTS baseline_date DATE DEFAULT CURRENT_DATE`,
   ];
 
   for (let i = 0; i < migrations.length; i++) {
@@ -298,4 +331,15 @@ async function reassignVendeurData(client, vendeurId, parentId) {
   await client.query('UPDATE clients SET user_id=$1 WHERE user_id=$2', [parentId, vendeurId]);
 }
 
-module.exports = { pool, initSchema, runMigrations, withTransaction, reassignVendeurData };
+// Génère un numéro de transaction lisible (ex: V-2026-0007) pour identifier
+// une vente/un contrat et pouvoir le retrouver dans Encaissements.
+async function nextNumero(table, prefix, userId) {
+  const year = new Date().getFullYear();
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS n FROM ${table} WHERE user_id=$1 AND EXTRACT(YEAR FROM created_at)=$2`,
+    [userId, year]
+  );
+  return `${prefix}-${year}-${String(rows[0].n + 1).padStart(4, '0')}`;
+}
+
+module.exports = { pool, initSchema, runMigrations, withTransaction, reassignVendeurData, nextNumero };

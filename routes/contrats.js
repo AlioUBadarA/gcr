@@ -1,7 +1,8 @@
 const express = require('express');
-const { pool } = require('../db/pool');
+const { pool, nextNumero } = require('../db/pool');
 const auth = require('../middleware/auth');
 const { getScopeIds } = require('../middleware/scope');
+const { findOrCreateClient } = require('./clients');
 
 const router = express.Router();
 router.use(auth);
@@ -39,12 +40,20 @@ router.post('/clients', async (req, res) => {
   try {
     const { client_id, client_nom, produit, quantite_mensuelle, prix_unitaire, date_debut, date_fin, statut, note } = req.body;
     if (!client_nom || !produit) return res.status(400).json({ error: 'Client et produit requis' });
+
+    let resolvedClientId = client_id || null;
+    if (!resolvedClientId) {
+      const client = await findOrCreateClient(req.userId, client_nom, null);
+      resolvedClientId = client.id;
+    }
+
+    const numero = await nextNumero('contrats_clients', 'CC', req.userId);
     const result = await pool.query(
-      `INSERT INTO contrats_clients (user_id, client_id, client_nom, produit, quantite_mensuelle, prix_unitaire, date_debut, date_fin, statut, note)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
-      [req.userId, client_id || null, client_nom.trim(), produit.trim(),
+      `INSERT INTO contrats_clients (user_id, client_id, client_nom, produit, quantite_mensuelle, prix_unitaire, date_debut, date_fin, statut, note, numero)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+      [req.userId, resolvedClientId, client_nom.trim(), produit.trim(),
        quantite_mensuelle || 0, prix_unitaire || 0,
-       date_debut || null, date_fin || null, statut || 'Actif', note || null]
+       date_debut || null, date_fin || null, statut || 'Actif', note || null, numero]
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
@@ -119,12 +128,13 @@ router.post('/paddy', async (req, res) => {
   try {
     const { producteur_nom, zone, telephone, variete, quantite_kg, prix_kg, date_debut, date_fin, statut, note } = req.body;
     if (!producteur_nom) return res.status(400).json({ error: 'Nom du producteur requis' });
+    const numero = await nextNumero('contrats_paddy', 'CP', req.userId);
     const result = await pool.query(
-      `INSERT INTO contrats_paddy (user_id, producteur_nom, zone, telephone, variete, quantite_kg, prix_kg, date_debut, date_fin, statut, note)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+      `INSERT INTO contrats_paddy (user_id, producteur_nom, zone, telephone, variete, quantite_kg, prix_kg, date_debut, date_fin, statut, note, numero)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
       [req.userId, producteur_nom.trim(), zone || null, telephone || null,
        variete || null, quantite_kg || 0, prix_kg || 0,
-       date_debut || null, date_fin || null, statut || 'Actif', note || null]
+       date_debut || null, date_fin || null, statut || 'Actif', note || null, numero]
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {

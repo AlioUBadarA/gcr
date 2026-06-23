@@ -62,11 +62,15 @@ router.get('/rizeries', async (req, res) => {
   try {
     const result = await pool.query(`
       SELECT r.id, r.nom, r.pays, r.region, r.ville, r.telephone, r.created_at,
-             COUNT(DISTINCT u.id)         AS nb_comptes,
-             COALESCE(SUM(v.montant), 0)  AS ca_total
+             r.emplois_baseline, r.masse_salariale_baseline, r.ca_baseline, r.baseline_date,
+             COUNT(DISTINCT u.id)                    AS nb_comptes,
+             COALESCE(SUM(va.ca_total), 0)           AS ca_total,
+             COALESCE(SUM(ea.nb_emplois), 0)         AS emplois_actuels,
+             COALESCE(SUM(ea.masse_salariale), 0)    AS masse_salariale_actuelle
       FROM rizeries r
-      LEFT JOIN users  u ON u.rizerie_id = r.id AND u.role IN ('rizier','vendeur')
-      LEFT JOIN ventes v ON v.user_id = u.id
+      LEFT JOIN users u ON u.rizerie_id = r.id AND u.role IN ('rizier','vendeur')
+      LEFT JOIN (SELECT user_id, SUM(montant) AS ca_total FROM ventes GROUP BY user_id) va ON va.user_id = u.id
+      LEFT JOIN (SELECT user_id, COUNT(*) AS nb_emplois, SUM(salaire) AS masse_salariale FROM emplois GROUP BY user_id) ea ON ea.user_id = u.id
       GROUP BY r.id
       ORDER BY r.nom
     `);
@@ -80,13 +84,15 @@ router.get('/rizeries', async (req, res) => {
 // POST /api/admin/rizeries
 router.post('/rizeries', async (req, res) => {
   try {
-    const { nom, pays, region, ville, telephone } = req.body;
+    const { nom, pays, region, ville, telephone, emplois_baseline, masse_salariale_baseline, ca_baseline } = req.body;
     if (!nom?.trim()) return res.status(400).json({ error: 'Nom de la rizerie requis' });
     const exists = await pool.query('SELECT id FROM rizeries WHERE LOWER(nom)=LOWER($1)', [nom.trim()]);
     if (exists.rows.length) return res.status(409).json({ error: 'Une rizerie avec ce nom existe déjà' });
     const result = await pool.query(
-      `INSERT INTO rizeries (nom, pays, region, ville, telephone) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-      [nom.trim(), pays || null, region || null, ville || null, telephone || null]
+      `INSERT INTO rizeries (nom, pays, region, ville, telephone, emplois_baseline, masse_salariale_baseline, ca_baseline, baseline_date)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,CURRENT_DATE) RETURNING *`,
+      [nom.trim(), pays || null, region || null, ville || null, telephone || null,
+       emplois_baseline || 0, masse_salariale_baseline || 0, ca_baseline || 0]
     );
     await log(req.userId, req.userNom, 'RIZERIE_CREATED', result.rows[0], {}, req.ip);
     res.status(201).json(result.rows[0]);
@@ -99,12 +105,14 @@ router.post('/rizeries', async (req, res) => {
 // PUT /api/admin/rizeries/:id
 router.put('/rizeries/:id', async (req, res) => {
   try {
-    const { nom, pays, region, ville, telephone } = req.body;
+    const { nom, pays, region, ville, telephone, emplois_baseline, masse_salariale_baseline, ca_baseline } = req.body;
     if (!nom?.trim()) return res.status(400).json({ error: 'Nom requis' });
     const result = await pool.query(
-      `UPDATE rizeries SET nom=$1, pays=$2, region=$3, ville=$4, telephone=$5, updated_at=NOW()
-       WHERE id=$6 RETURNING *`,
-      [nom.trim(), pays || null, region || null, ville || null, telephone || null, req.params.id]
+      `UPDATE rizeries SET nom=$1, pays=$2, region=$3, ville=$4, telephone=$5,
+         emplois_baseline=$6, masse_salariale_baseline=$7, ca_baseline=$8, updated_at=NOW()
+       WHERE id=$9 RETURNING *`,
+      [nom.trim(), pays || null, region || null, ville || null, telephone || null,
+       emplois_baseline || 0, masse_salariale_baseline || 0, ca_baseline || 0, req.params.id]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Rizerie non trouvée' });
     // Sync le champ texte rizerie sur les users liés
@@ -497,17 +505,20 @@ router.get('/audit', async (req, res) => {
     const limit  = Math.min(Number(req.query.limit)  || 100, 500);
     const offset = Number(req.query.offset) || 0;
     const action = req.query.action || null;
+    const date   = req.query.date || null; // YYYY-MM-DD, jour unique
 
-    let q = 'SELECT * FROM audit_logs';
+    const conditions = [];
     const params = [];
-    if (action) { q += ' WHERE action = $1'; params.push(action); }
-    q += ` ORDER BY created_at DESC LIMIT $${params.length+1} OFFSET $${params.length+2}`;
-    params.push(limit, offset);
+    if (action) { conditions.push(`action = $${params.length + 1}`); params.push(action); }
+    if (date)   { conditions.push(`created_at::date = $${params.length + 1}`); params.push(date); }
+    const where = conditions.length ? ` WHERE ${conditions.join(' AND ')}` : '';
+
+    let q = `SELECT * FROM audit_logs${where} ORDER BY created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+    const listParams = [...params, limit, offset];
 
     const [logsR, countR] = await Promise.all([
-      pool.query(q, params),
-      pool.query('SELECT COUNT(*) FROM audit_logs' + (action ? ' WHERE action=$1' : ''),
-                 action ? [action] : []),
+      pool.query(q, listParams),
+      pool.query(`SELECT COUNT(*) FROM audit_logs${where}`, params),
     ]);
     res.json({ logs: logsR.rows, total: Number(countR.rows[0].count) });
   } catch (err) {

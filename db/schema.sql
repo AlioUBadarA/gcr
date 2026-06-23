@@ -343,3 +343,48 @@ BEGIN
        FOR EACH ROW EXECUTE FUNCTION set_updated_at();', t);
   END LOOP;
 END $$;
+
+-- ── Produits suivis par client ────────────────────────────────
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS produits_interet TEXT[] DEFAULT '{}';
+
+-- ── Numéro de transaction (identification vente/contrat) ───────
+ALTER TABLE ventes           ADD COLUMN IF NOT EXISTS numero VARCHAR(20);
+ALTER TABLE contrats_clients ADD COLUMN IF NOT EXISTS numero VARCHAR(20);
+ALTER TABLE contrats_paddy   ADD COLUMN IF NOT EXISTS numero VARCHAR(20);
+
+-- Backfill des transactions existantes sans numéro (idempotent : ne touche que NULL)
+WITH numbered AS (
+  SELECT id, 'V-' || EXTRACT(YEAR FROM created_at)::INT || '-' ||
+         LPAD(ROW_NUMBER() OVER (PARTITION BY user_id, EXTRACT(YEAR FROM created_at) ORDER BY created_at)::TEXT, 4, '0') AS num
+  FROM ventes WHERE numero IS NULL
+)
+UPDATE ventes v SET numero = n.num FROM numbered n WHERE v.id = n.id;
+
+WITH numbered AS (
+  SELECT id, 'CC-' || EXTRACT(YEAR FROM created_at)::INT || '-' ||
+         LPAD(ROW_NUMBER() OVER (PARTITION BY user_id, EXTRACT(YEAR FROM created_at) ORDER BY created_at)::TEXT, 4, '0') AS num
+  FROM contrats_clients WHERE numero IS NULL
+)
+UPDATE contrats_clients c SET numero = n.num FROM numbered n WHERE c.id = n.id;
+
+WITH numbered AS (
+  SELECT id, 'CP-' || EXTRACT(YEAR FROM created_at)::INT || '-' ||
+         LPAD(ROW_NUMBER() OVER (PARTITION BY user_id, EXTRACT(YEAR FROM created_at) ORDER BY created_at)::TEXT, 4, '0') AS num
+  FROM contrats_paddy WHERE numero IS NULL
+)
+UPDATE contrats_paddy c SET numero = n.num FROM numbered n WHERE c.id = n.id;
+
+-- ── Versements : permettre de rattacher un encaissement à une vente OU un contrat client ──
+ALTER TABLE versements ALTER COLUMN vente_id DROP NOT NULL;
+ALTER TABLE versements ADD COLUMN IF NOT EXISTS contrat_client_id UUID REFERENCES contrats_clients(id) ON DELETE CASCADE;
+DO $$ BEGIN
+  ALTER TABLE versements ADD CONSTRAINT versements_one_target_check
+    CHECK (num_nonnulls(vente_id, contrat_client_id) = 1);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+CREATE INDEX IF NOT EXISTS idx_versements_contrat_client ON versements(contrat_client_id);
+
+-- ── Rizeries : photo de départ (emplois/masse salariale/CA) pour suivre l'évolution ──
+ALTER TABLE rizeries ADD COLUMN IF NOT EXISTS emplois_baseline INT DEFAULT 0;
+ALTER TABLE rizeries ADD COLUMN IF NOT EXISTS masse_salariale_baseline NUMERIC(14,2) DEFAULT 0;
+ALTER TABLE rizeries ADD COLUMN IF NOT EXISTS ca_baseline NUMERIC(14,2) DEFAULT 0;
+ALTER TABLE rizeries ADD COLUMN IF NOT EXISTS baseline_date DATE DEFAULT CURRENT_DATE;

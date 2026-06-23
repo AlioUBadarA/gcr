@@ -1,7 +1,8 @@
 const express = require('express');
-const { pool } = require('../db/pool');
+const { pool, nextNumero } = require('../db/pool');
 const auth = require('../middleware/auth');
 const { attachScopeIds } = require('../middleware/scope');
+const { findOrCreateClient } = require('./clients');
 
 const router = express.Router();
 router.use(auth, attachScopeIds);
@@ -55,28 +56,34 @@ router.get('/', async (req, res) => {
 // POST /api/ventes
 router.post('/', async (req, res) => {
   try {
-    const { client_id, client_nom, date_vente, produit, quantite, prix_unitaire, statut_paiement, date_echeance, mode, cout_unitaire, note } = req.body;
+    const { client_id, client_nom, date_vente, produit, quantite, prix_unitaire, statut_paiement, date_echeance, mode, cout_unitaire, note, telephone } = req.body;
     if (!client_nom || !date_vente || !produit || !quantite || !prix_unitaire)
       return res.status(400).json({ error: 'Champs requis : client_nom, date_vente, produit, quantite, prix_unitaire' });
     if (quantite <= 0 || prix_unitaire <= 0)
       return res.status(400).json({ error: 'Quantite et prix doivent etre positifs' });
     if (mode && !MODES.includes(mode)) return res.status(400).json({ error: 'Mode de paiement invalide' });
 
-    const result = await pool.query(
-      `INSERT INTO ventes (user_id, client_id, client_nom, date_vente, produit, quantite, prix_unitaire, statut_paiement, date_echeance, mode, cout_unitaire, note)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
-      [req.userId, client_id || null, client_nom.trim(), date_vente, produit,
-       +quantite, +prix_unitaire, statut_paiement || 'En cours',
-       date_echeance || null, mode || null, cout_unitaire || 0, note || null]
-    );
-
-    // Si client_id fourni, passer statut a Actif
-    if (client_id) {
+    // Rattache la vente à un client existant (ou le crée) pour garder le portefeuille à jour.
+    let resolvedClientId = client_id || null;
+    if (!resolvedClientId) {
+      const client = await findOrCreateClient(req.userId, client_nom, telephone);
+      resolvedClientId = client.id;
+    } else {
       await pool.query(
         "UPDATE clients SET statut='Actif' WHERE id=$1 AND user_id=$2 AND statut='Prospect'",
         [client_id, req.userId]
       );
     }
+
+    const numero = await nextNumero('ventes', 'V', req.userId);
+    const result = await pool.query(
+      `INSERT INTO ventes (user_id, client_id, client_nom, date_vente, produit, quantite, prix_unitaire, statut_paiement, date_echeance, mode, cout_unitaire, note, numero)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+      [req.userId, resolvedClientId, client_nom.trim(), date_vente, produit,
+       +quantite, +prix_unitaire, statut_paiement || 'En cours',
+       date_echeance || null, mode || null, cout_unitaire || 0, note || null, numero]
+    );
+
     res.status(201).json(result.rows[0]);
   } catch (err) {
     console.error('POST ventes:', err.message);

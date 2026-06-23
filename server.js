@@ -58,6 +58,7 @@ app.use('/api/managers',    require('./routes/managers'));
 app.use('/api/produits',    require('./routes/produits'));
 app.use('/api/activites',   require('./routes/activites'));
 app.use('/api/journal',     require('./routes/journal'));
+app.use('/api/encaissements', require('./routes/encaissements'));
 
 // ── 404 ───────────────────────────────────────────────────────
 app.use((req, res) => {

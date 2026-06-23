@@ -9,6 +9,33 @@ router.use(auth, attachScopeIds);
 const TYPES_VALIDES = ['Grossiste','Detaillant marche','Boutique','Restauration','Cantine/Institution'];
 const STATUTS_VALIDES = ['Actif','Prospect','Dormant'];
 
+// Cherche un client existant (même rizier, nom identique) pour le rattacher à une
+// nouvelle vente/contrat, ou le crée automatiquement sinon — pour que chaque
+// transaction garde le portefeuille clients à jour sans saisie manuelle.
+async function findOrCreateClient(userId, clientNom, telephone) {
+  const nom = clientNom.trim();
+  const existing = await pool.query(
+    'SELECT * FROM clients WHERE user_id=$1 AND LOWER(nom)=LOWER($2) LIMIT 1',
+    [userId, nom]
+  );
+  if (existing.rows.length) {
+    const c = existing.rows[0];
+    const result = await pool.query(
+      `UPDATE clients SET
+         statut = CASE WHEN statut = 'Prospect' THEN 'Actif' ELSE statut END,
+         telephone = COALESCE(telephone, $1)
+       WHERE id = $2 RETURNING *`,
+      [telephone || null, c.id]
+    );
+    return result.rows[0];
+  }
+  const created = await pool.query(
+    `INSERT INTO clients (user_id, nom, type, statut, telephone) VALUES ($1,$2,'Boutique','Actif',$3) RETURNING *`,
+    [userId, nom, telephone || null]
+  );
+  return created.rows[0];
+}
+
 // GET /api/clients
 router.get('/', async (req, res) => {
   try {
@@ -41,15 +68,16 @@ router.get('/', async (req, res) => {
 // POST /api/clients
 router.post('/', async (req, res) => {
   try {
-    const { nom, type, statut, zone, region, segment, potentiel_annuel, telephone, volume_estime, frequence, valorise, horaire, note } = req.body;
+    const { nom, type, statut, zone, region, segment, potentiel_annuel, telephone, volume_estime, frequence, valorise, horaire, note, produits_interet } = req.body;
     if (!nom || !type) return res.status(400).json({ error: 'Nom et type requis' });
     if (!TYPES_VALIDES.includes(type)) return res.status(400).json({ error: 'Type invalide' });
 
     const result = await pool.query(
-      `INSERT INTO clients (user_id, nom, type, statut, zone, region, segment, potentiel_annuel, telephone, volume_estime, frequence, valorise, horaire, note)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
+      `INSERT INTO clients (user_id, nom, type, statut, zone, region, segment, potentiel_annuel, telephone, volume_estime, frequence, valorise, horaire, note, produits_interet)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
       [req.userId, nom.trim(), type, statut || 'Prospect', zone || null, region || null, segment || null,
-       potentiel_annuel || 0, telephone || null, volume_estime || 0, frequence || null, valorise || null, horaire || null, note || null]
+       potentiel_annuel || 0, telephone || null, volume_estime || 0, frequence || null, valorise || null, horaire || null, note || null,
+       Array.isArray(produits_interet) ? produits_interet : []]
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
@@ -76,7 +104,7 @@ router.get('/:id', async (req, res) => {
 // PUT /api/clients/:id
 router.put('/:id', async (req, res) => {
   try {
-    const { nom, type, statut, zone, region, segment, potentiel_annuel, telephone, volume_estime, frequence, valorise, horaire, note } = req.body;
+    const { nom, type, statut, zone, region, segment, potentiel_annuel, telephone, volume_estime, frequence, valorise, horaire, note, produits_interet } = req.body;
     if (type && !TYPES_VALIDES.includes(type)) return res.status(400).json({ error: 'Type invalide' });
     if (statut && !STATUTS_VALIDES.includes(statut)) return res.status(400).json({ error: 'Statut invalide' });
 
@@ -84,10 +112,11 @@ router.put('/:id', async (req, res) => {
     const result = await pool.query(
       `UPDATE clients SET
          nom=$1, type=$2, statut=$3, zone=$4, region=$5, segment=$6, potentiel_annuel=$7, telephone=$8,
-         volume_estime=$9, frequence=$10, valorise=$11, horaire=$12, note=$13
-       WHERE id=$14 AND user_id = ANY($15::uuid[]) RETURNING *`,
+         volume_estime=$9, frequence=$10, valorise=$11, horaire=$12, note=$13, produits_interet=$14
+       WHERE id=$15 AND user_id = ANY($16::uuid[]) RETURNING *`,
       [nom, type, statut, zone || null, region || null, segment || null, potentiel_annuel || 0, telephone || null,
        volume_estime || 0, frequence || null, valorise || null, horaire || null, note || null,
+       Array.isArray(produits_interet) ? produits_interet : [],
        req.params.id, ids]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Client non trouve' });
@@ -130,3 +159,4 @@ router.delete('/:id', async (req, res) => {
 });
 
 module.exports = router;
+module.exports.findOrCreateClient = findOrCreateClient;
