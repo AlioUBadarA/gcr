@@ -2,11 +2,38 @@ const { pool } = require('../db/pool');
 
 async function getScopeIds(userId, role) {
   if (role === 'vendeur') return [userId];
-  const r = await pool.query(
+
+  if (role === 'manager') {
+    const r = await pool.query(
+      "SELECT id FROM users WHERE parent_id = $1 AND role = 'vendeur'",
+      [userId]
+    );
+    return [userId, ...r.rows.map(x => x.id)];
+  }
+
+  // rizier : lui-même + ses managers + les vendeurs de chaque manager + les vendeurs
+  // rattachés directement à lui (hiérarchie à 2 ou 3 niveaux selon l'équipe).
+  const managers = await pool.query(
+    "SELECT id FROM users WHERE parent_id = $1 AND role = 'manager'",
+    [userId]
+  );
+  const managerIds = managers.rows.map(x => x.id);
+
+  const directVendeurs = await pool.query(
     "SELECT id FROM users WHERE parent_id = $1 AND role = 'vendeur'",
     [userId]
   );
-  return [userId, ...r.rows.map(x => x.id)];
+
+  let teamVendeurIds = [];
+  if (managerIds.length) {
+    const team = await pool.query(
+      "SELECT id FROM users WHERE parent_id = ANY($1) AND role = 'vendeur'",
+      [managerIds]
+    );
+    teamVendeurIds = team.rows.map(x => x.id);
+  }
+
+  return [userId, ...managerIds, ...directVendeurs.rows.map(x => x.id), ...teamVendeurIds];
 }
 
 // Middleware : résout le scope une fois par requête et l'attache à req.scopeIds,

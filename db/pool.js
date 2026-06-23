@@ -125,6 +125,7 @@ async function runMigrations() {
     `ALTER TABLE prospection ADD COLUMN IF NOT EXISTS valeur_estimee NUMERIC(14,2) DEFAULT 0`,
     `ALTER TABLE rizeries ADD COLUMN IF NOT EXISTS pays VARCHAR(80)`,
     `ALTER TABLE rizeries ADD COLUMN IF NOT EXISTS region VARCHAR(100)`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS zone VARCHAR(100)`,
     `DO $$
      DECLARE c TEXT;
      BEGIN
@@ -134,9 +135,79 @@ async function runMigrations() {
        IF c IS NOT NULL THEN EXECUTE format('ALTER TABLE users DROP CONSTRAINT %I', c); END IF;
        BEGIN
          ALTER TABLE users ADD CONSTRAINT users_role_check
-           CHECK (role IN ('rizier','superadmin','vendeur','support'));
+           CHECK (role IN ('rizier','superadmin','vendeur','support','manager'));
        EXCEPTION WHEN duplicate_object THEN NULL; END;
      END $$`,
+    // Relabellise le pipeline de prospection à l'identique du HTML de référence
+    // (Nouveau/Qualifié/Proposition/Négociation/Gagné/Perdu) — mappe les anciennes
+    // valeurs avant de remplacer la contrainte, pour ne pas casser les lignes existantes.
+    `UPDATE prospection SET statut = 'Qualifié'    WHERE statut = 'En contact'`,
+    `UPDATE prospection SET statut = 'Proposition' WHERE statut = 'Présentation faite'`,
+    `UPDATE prospection SET statut = 'Négociation' WHERE statut = 'Devis envoyé'`,
+    `ALTER TABLE prospection ADD COLUMN IF NOT EXISTS region VARCHAR(100)`,
+    `ALTER TABLE prospection ADD COLUMN IF NOT EXISTS source VARCHAR(50)`,
+    `DO $$
+     DECLARE c TEXT;
+     BEGIN
+       SELECT conname INTO c FROM pg_constraint
+       WHERE conrelid = 'prospection'::regclass AND contype = 'c'
+         AND pg_get_constraintdef(oid) LIKE '%statut%' LIMIT 1;
+       IF c IS NOT NULL THEN EXECUTE format('ALTER TABLE prospection DROP CONSTRAINT %I', c); END IF;
+       BEGIN
+         ALTER TABLE prospection ADD CONSTRAINT prospection_statut_check
+           CHECK (statut IN ('Nouveau','Qualifié','Proposition','Négociation','Gagné','Perdu'));
+       EXCEPTION WHEN duplicate_object THEN NULL; END;
+     END $$`,
+    `ALTER TABLE clients ADD COLUMN IF NOT EXISTS region VARCHAR(100)`,
+    `ALTER TABLE clients ADD COLUMN IF NOT EXISTS segment VARCHAR(100)`,
+    `ALTER TABLE clients ADD COLUMN IF NOT EXISTS potentiel_annuel NUMERIC(14,2) DEFAULT 0`,
+    `ALTER TABLE ventes ADD COLUMN IF NOT EXISTS mode VARCHAR(20)`,
+    `CREATE TABLE IF NOT EXISTS versements (
+       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+       vente_id UUID NOT NULL REFERENCES ventes(id) ON DELETE CASCADE,
+       montant NUMERIC(12,2) NOT NULL CHECK (montant > 0),
+       mode VARCHAR(20),
+       date DATE NOT NULL DEFAULT CURRENT_DATE,
+       created_at TIMESTAMPTZ DEFAULT NOW()
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_versements_vente ON versements(vente_id)`,
+    `CREATE TABLE IF NOT EXISTS relances (
+       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+       vente_id UUID NOT NULL REFERENCES ventes(id) ON DELETE CASCADE,
+       date DATE NOT NULL DEFAULT CURRENT_DATE,
+       created_at TIMESTAMPTZ DEFAULT NOW()
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_relances_vente ON relances(vente_id)`,
+    `CREATE TABLE IF NOT EXISTS produits (
+       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+       user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       ref VARCHAR(40) NOT NULL,
+       nom VARCHAR(100) NOT NULL,
+       prix_kg NUMERIC(10,2) DEFAULT 0,
+       cout_kg NUMERIC(10,2) DEFAULT 0,
+       tendance VARCHAR(20) DEFAULT 'stable',
+       created_at TIMESTAMPTZ DEFAULT NOW(),
+       updated_at TIMESTAMPTZ DEFAULT NOW(),
+       UNIQUE(user_id, ref)
+     )`,
+    `CREATE TABLE IF NOT EXISTS activites (
+       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+       user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       date DATE NOT NULL DEFAULT CURRENT_DATE,
+       type VARCHAR(30) NOT NULL,
+       cible VARCHAR(150),
+       resultat VARCHAR(20) DEFAULT 'Neutre',
+       note TEXT,
+       created_at TIMESTAMPTZ DEFAULT NOW()
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_activites_user ON activites(user_id, date DESC)`,
+    `CREATE TABLE IF NOT EXISTS alertes_traitees (
+       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+       user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       alerte_key VARCHAR(300) NOT NULL,
+       created_at TIMESTAMPTZ DEFAULT NOW(),
+       UNIQUE(user_id, alerte_key)
+     )`,
   ];
 
   for (let i = 0; i < migrations.length; i++) {

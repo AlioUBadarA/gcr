@@ -6,70 +6,141 @@ const { getScopeIds } = require('../middleware/scope');
 const router = express.Router();
 router.use(auth);
 
-// GET /api/actions — relances calculées automatiquement
+function alertKey(a) {
+  return `${a.cat || ''}|${a.owner || ''}|${a.msg || ''}`;
+}
+
+// GET /api/actions — moteur d'alertes unifié (client inactif >60j, créance >30j, objectif atteinte<80%)
+// trié rouge avant orange, par valeur décroissante — à l'identique du HTML de référence.
 router.get('/', async (req, res) => {
   try {
     const ids = await getScopeIds(req.userId, req.userRole);
+    const annee = new Date().getFullYear();
+    const monthsElapsed = new Date().getMonth() + 1;
 
-    const [creancesR, inactifsR, prospectsR] = await Promise.all([
-
+    const [inactifsR, creancesR, vendeursR, ventesR, forecastR, traiteesR] = await Promise.all([
       pool.query(`
-        SELECT v.id, v.client_nom, v.montant, v.date_vente, v.date_echeance,
-               u.nom AS vendeur_nom,
-               (NOW()::date - COALESCE(v.date_echeance, v.date_vente + 30)::date) AS jours_retard
-        FROM ventes v
-        LEFT JOIN users u ON u.id = v.user_id
-        WHERE v.user_id = ANY($1::uuid[])
-          AND v.statut_paiement = 'En retard'
-        ORDER BY jours_retard DESC NULLS LAST
-        LIMIT 50
-      `, [ids]),
-
-      pool.query(`
-        SELECT c.id, c.nom, c.telephone, c.zone, c.type,
-               u.nom AS vendeur_nom,
-               MAX(v.date_vente) AS derniere_vente,
-               (NOW()::date - MAX(v.date_vente)::date) AS jours_inactif
+        SELECT c.id, c.nom, u.id AS vendeur_id, u.nom AS vendeur_nom, MAX(v.date_vente) AS derniere_vente,
+               (NOW()::date - MAX(v.date_vente)::date) AS jours_inactif,
+               COALESCE(SUM(v.montant),0) AS ca_total
         FROM clients c
         LEFT JOIN ventes v ON v.client_id = c.id
         LEFT JOIN users u ON u.id = c.user_id
-        WHERE c.user_id = ANY($1::uuid[]) AND c.statut = 'Actif'
-        GROUP BY c.id, u.nom
-        HAVING MAX(v.date_vente) < NOW() - INTERVAL '30 days'
-            OR MAX(v.date_vente) IS NULL
-        ORDER BY jours_inactif DESC NULLS LAST
-        LIMIT 30
+        WHERE c.user_id = ANY($1::uuid[]) AND c.statut != 'Dormant'
+        GROUP BY c.id, u.id, u.nom
+        HAVING (NOW()::date - MAX(v.date_vente)::date) > 60 AND (NOW()::date - MAX(v.date_vente)::date) < 900
       `, [ids]),
 
       pool.query(`
-        SELECT p.id, p.nom, p.telephone, p.zone, p.statut, p.priorite,
-               u.nom AS vendeur_nom,
-               (NOW()::date - COALESCE(p.date_contact, p.created_at::date)) AS jours_sans_contact
-        FROM prospection p
-        LEFT JOIN users u ON u.id = p.user_id
-        WHERE p.user_id = ANY($1::uuid[])
-          AND p.statut NOT IN ('Gagné','Perdu')
-          AND (p.date_contact < NOW() - INTERVAL '7 days' OR p.date_contact IS NULL)
-        ORDER BY
-          CASE p.priorite WHEN 'Haute' THEN 1 WHEN 'Normale' THEN 2 ELSE 3 END,
-          jours_sans_contact DESC NULLS LAST
-        LIMIT 30
+        SELECT v.id, v.client_nom, v.montant, v.user_id, u.nom AS vendeur_nom,
+               (NOW()::date - COALESCE(v.date_echeance, v.date_vente + 30)::date) AS jours_retard
+        FROM ventes v
+        LEFT JOIN users u ON u.id = v.user_id
+        WHERE v.user_id = ANY($1::uuid[]) AND v.statut_paiement != 'Paye'
       `, [ids]),
+
+      pool.query(`SELECT id, nom FROM users WHERE id = ANY($1::uuid[]) AND role='vendeur'`, [ids]),
+
+      pool.query(`
+        SELECT user_id, COALESCE(SUM(montant),0) AS ca
+        FROM ventes WHERE user_id = ANY($1::uuid[]) AND EXTRACT(YEAR FROM date_vente)=$2
+        GROUP BY user_id
+      `, [ids, annee]),
+
+      pool.query(`
+        SELECT user_id, COALESCE(SUM(objectif_montant),0) AS obj
+        FROM forecast WHERE user_id = ANY($1::uuid[]) AND annee=$2
+        GROUP BY user_id
+      `, [ids, annee]),
+
+      pool.query(`SELECT alerte_key FROM alertes_traitees WHERE user_id=$1`, [req.userId]),
     ]);
 
+    const caMap = {}; ventesR.rows.forEach(r => { caMap[r.user_id] = +r.ca; });
+    const objMap = {}; forecastR.rows.forEach(r => { objMap[r.user_id] = +r.obj; });
+    const traitees = new Set(traiteesR.rows.map(r => r.alerte_key));
+
+    const alertes = [];
+
+    inactifsR.rows.forEach(c => {
+      const jours = c.jours_inactif != null ? +c.jours_inactif : null;
+      if (jours == null) return;
+      alertes.push({
+        cat: 'Client inactif',
+        niveau: jours > 90 ? 'rouge' : 'orange',
+        msg: `${c.nom} — aucun achat depuis ${jours} j`,
+        valeur: +c.ca_total,
+        owner: c.vendeur_id,
+        owner_nom: c.vendeur_nom,
+      });
+    });
+
+    creancesR.rows.forEach(v => {
+      const jours = v.jours_retard != null ? +v.jours_retard : null;
+      if (jours == null || jours <= 30) return;
+      alertes.push({
+        cat: 'Créance en retard',
+        niveau: jours > 90 ? 'rouge' : 'orange',
+        msg: `${v.client_nom} — ${jours} j de retard`,
+        valeur: +v.montant,
+        owner: v.user_id,
+        owner_nom: v.vendeur_nom,
+      });
+    });
+
+    vendeursR.rows.forEach(vd => {
+      const objAnnuel = objMap[vd.id] || 0;
+      if (!objAnnuel) return;
+      const ca = caMap[vd.id] || 0;
+      const prorat = objAnnuel / 12 * monthsElapsed;
+      const tauxAtteinte = prorat > 0 ? ca / prorat * 100 : 0;
+      if (tauxAtteinte >= 80) return;
+      alertes.push({
+        cat: 'Objectif sous cible',
+        niveau: tauxAtteinte < 60 ? 'rouge' : 'orange',
+        msg: `${vd.nom} — atteinte ${Math.round(tauxAtteinte)} %`,
+        valeur: Math.max(0, objAnnuel - ca),
+        owner: vd.id,
+        owner_nom: vd.nom,
+      });
+    });
+
+    const ordre = { rouge: 0, orange: 1 };
+    alertes.sort((a, b) => ordre[a.niveau] - ordre[b.niveau] || b.valeur - a.valeur);
+    alertes.forEach(a => { a.key = alertKey(a); a.traitee = traitees.has(a.key); });
+
     res.json({
-      creances_retard: creancesR.rows.map(r => ({
-        ...r, montant: +r.montant, jours_retard: r.jours_retard != null ? +r.jours_retard : null,
-      })),
-      clients_inactifs: inactifsR.rows.map(r => ({
-        ...r, jours_inactif: r.jours_inactif != null ? +r.jours_inactif : null,
-      })),
-      prospects_relance: prospectsR.rows.map(r => ({
-        ...r, jours_sans_contact: r.jours_sans_contact != null ? +r.jours_sans_contact : null,
-      })),
+      alertes,
+      stats: {
+        total: alertes.length,
+        a_traiter: alertes.filter(a => !a.traitee).length,
+        rouges_actives: alertes.filter(a => a.niveau === 'rouge' && !a.traitee).length,
+        traitees: alertes.filter(a => a.traitee).length,
+      },
     });
   } catch (err) {
     console.error('GET actions:', err.message);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// PATCH /api/actions/traiter — bascule l'état traité/à traiter d'une alerte
+router.patch('/traiter', async (req, res) => {
+  try {
+    const { key, traitee } = req.body;
+    if (!key) return res.status(400).json({ error: 'Clé d\'alerte requise' });
+    if (traitee) {
+      await pool.query(
+        `INSERT INTO alertes_traitees (user_id, alerte_key) VALUES ($1,$2)
+         ON CONFLICT (user_id, alerte_key) DO NOTHING`,
+        [req.userId, key]
+      );
+    } else {
+      await pool.query(`DELETE FROM alertes_traitees WHERE user_id=$1 AND alerte_key=$2`, [req.userId, key]);
+    }
+    res.json({ message: 'OK' });
+  } catch (err) {
+    console.error('PATCH actions/traiter:', err.message);
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });

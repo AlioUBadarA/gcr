@@ -11,8 +11,9 @@ router.get('/', async (req, res) => {
   try {
     const annee = Number(req.query.annee) || new Date().getFullYear();
     const ids = await getScopeIds(req.userId, req.userRole);
+    const monthsElapsed = annee === new Date().getFullYear() ? new Date().getMonth() + 1 : 12;
 
-    const [forecastR, realisR] = await Promise.all([
+    const [forecastR, realisR, vendeursR, ventesVendeurR, objVendeurR] = await Promise.all([
       pool.query(
         `SELECT id, mois, produit, objectif_montant, user_id
          FROM forecast WHERE user_id = ANY($1::uuid[]) AND annee = $2
@@ -26,6 +27,19 @@ router.get('/', async (req, res) => {
          WHERE user_id = ANY($1::uuid[])
            AND EXTRACT(YEAR FROM date_vente) = $2
          GROUP BY mois`,
+        [ids, annee]
+      ),
+      pool.query(`SELECT id, nom FROM users WHERE id = ANY($1::uuid[]) AND role='vendeur'`, [ids]),
+      pool.query(
+        `SELECT user_id, COALESCE(SUM(montant),0) AS ca
+         FROM ventes WHERE user_id = ANY($1::uuid[]) AND EXTRACT(YEAR FROM date_vente)=$2
+         GROUP BY user_id`,
+        [ids, annee]
+      ),
+      pool.query(
+        `SELECT user_id, COALESCE(SUM(objectif_montant),0) AS obj
+         FROM forecast WHERE user_id = ANY($1::uuid[]) AND annee=$2
+         GROUP BY user_id`,
         [ids, annee]
       ),
     ]);
@@ -50,7 +64,26 @@ router.get('/', async (req, res) => {
       };
     });
 
-    res.json({ annee, months });
+    const caVendeurMap = {}; ventesVendeurR.rows.forEach(r => { caVendeurMap[r.user_id] = +r.ca; });
+    const objVendeurMap = {}; objVendeurR.rows.forEach(r => { objVendeurMap[r.user_id] = +r.obj; });
+    const par_vendeur = vendeursR.rows.map(v => {
+      const ca = caVendeurMap[v.id] || 0;
+      const objectif = objVendeurMap[v.id] || 0;
+      const forecast = Math.round(ca / monthsElapsed * 12);
+      return {
+        id: v.id, nom: v.nom, ca_ytd: ca, objectif, forecast,
+        ecart: forecast - objectif,
+        taux_atteinte_prevue: objectif > 0 ? forecast / objectif * 100 : 0,
+      };
+    });
+
+    const quarterly = [1, 2, 3, 4].map(q => {
+      const moisQ = [3 * q - 2, 3 * q - 1, 3 * q];
+      const val = months.filter(mm => moisQ.includes(mm.mois)).reduce((s, mm) => s + mm.realise, 0);
+      return { trimestre: `T${q} ${annee}`, valeur: val };
+    });
+
+    res.json({ annee, months, par_vendeur, quarterly });
   } catch (err) {
     console.error('GET forecast:', err.message);
     res.status(500).json({ error: 'Erreur serveur' });

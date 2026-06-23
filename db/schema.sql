@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS users (
   rizerie          VARCHAR(150),
   telephone        VARCHAR(30),
   ville            VARCHAR(80),
+  zone             VARCHAR(100),
   role             VARCHAR(20) NOT NULL DEFAULT 'rizier' CHECK (role IN ('rizier','superadmin')),
   suspended        BOOLEAN NOT NULL DEFAULT FALSE,
   suspended_at     TIMESTAMPTZ,
@@ -28,8 +29,9 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS suspended        BOOLEAN NOT NULL DEF
 ALTER TABLE users ADD COLUMN IF NOT EXISTS suspended_at     TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS suspended_reason TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS parent_id        UUID REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS zone             VARCHAR(100);
 
--- Étend la contrainte role pour inclure vendeur, puis support
+-- Étend la contrainte role pour inclure vendeur, support, puis manager
 DO $$
 DECLARE c TEXT;
 BEGIN
@@ -39,7 +41,7 @@ BEGIN
   IF c IS NOT NULL THEN EXECUTE format('ALTER TABLE users DROP CONSTRAINT %I', c); END IF;
   BEGIN
     ALTER TABLE users ADD CONSTRAINT users_role_check
-      CHECK (role IN ('rizier','superadmin','vendeur','support'));
+      CHECK (role IN ('rizier','superadmin','vendeur','support','manager'));
   EXCEPTION WHEN duplicate_object THEN NULL; END;
 END $$;
 
@@ -77,9 +79,11 @@ CREATE TABLE IF NOT EXISTS prospection (
   nom          VARCHAR(150) NOT NULL,
   type_client  VARCHAR(50),
   zone         VARCHAR(100),
+  region       VARCHAR(100),
+  source       VARCHAR(50),
   telephone    VARCHAR(30),
   statut       VARCHAR(40) NOT NULL DEFAULT 'Nouveau'
-               CHECK (statut IN ('Nouveau','En contact','Présentation faite','Devis envoyé','Gagné','Perdu')),
+               CHECK (statut IN ('Nouveau','Qualifié','Proposition','Négociation','Gagné','Perdu')),
   priorite     VARCHAR(20) DEFAULT 'Normale'
                CHECK (priorite IN ('Haute','Normale','Basse')),
   date_contact DATE,
@@ -88,6 +92,8 @@ CREATE TABLE IF NOT EXISTS prospection (
   created_at   TIMESTAMPTZ DEFAULT NOW(),
   updated_at   TIMESTAMPTZ DEFAULT NOW()
 );
+ALTER TABLE prospection ADD COLUMN IF NOT EXISTS region VARCHAR(100);
+ALTER TABLE prospection ADD COLUMN IF NOT EXISTS source VARCHAR(50);
 
 -- cout_unitaire sur ventes pour le calcul de rentabilité
 ALTER TABLE ventes ADD COLUMN IF NOT EXISTS cout_unitaire NUMERIC(10,2) DEFAULT 0;
@@ -177,6 +183,9 @@ CREATE TABLE IF NOT EXISTS clients (
   statut      VARCHAR(20) NOT NULL DEFAULT 'Prospect' CHECK (statut IN (
                 'Actif','Prospect','Dormant')),
   zone        VARCHAR(100),
+  region      VARCHAR(100),
+  segment     VARCHAR(100),
+  potentiel_annuel NUMERIC(14,2) DEFAULT 0,
   telephone   VARCHAR(30),
   volume_estime NUMERIC(10,2) DEFAULT 0,
   frequence   VARCHAR(50),
@@ -186,6 +195,9 @@ CREATE TABLE IF NOT EXISTS clients (
   created_at  TIMESTAMPTZ DEFAULT NOW(),
   updated_at  TIMESTAMPTZ DEFAULT NOW()
 );
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS region VARCHAR(100);
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS segment VARCHAR(100);
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS potentiel_annuel NUMERIC(14,2) DEFAULT 0;
 
 -- ── VENTES ───────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS ventes (
@@ -201,9 +213,69 @@ CREATE TABLE IF NOT EXISTS ventes (
   statut_paiement VARCHAR(20) NOT NULL DEFAULT 'En cours' CHECK (statut_paiement IN (
                     'Paye','En cours','En retard')),
   date_echeance DATE,
+  mode        VARCHAR(20) CHECK (mode IN ('Espèces','Virement','Chèque','Mobile Money')),
   note        TEXT,
   created_at  TIMESTAMPTZ DEFAULT NOW(),
   updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE ventes ADD COLUMN IF NOT EXISTS mode VARCHAR(20);
+
+-- ── VERSEMENTS (paiements échelonnés sur une vente) ───────────
+CREATE TABLE IF NOT EXISTS versements (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  vente_id    UUID NOT NULL REFERENCES ventes(id) ON DELETE CASCADE,
+  montant     NUMERIC(12,2) NOT NULL CHECK (montant > 0),
+  mode        VARCHAR(20) CHECK (mode IN ('Espèces','Virement','Chèque','Mobile Money')),
+  date        DATE NOT NULL DEFAULT CURRENT_DATE,
+  created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_versements_vente ON versements(vente_id);
+
+-- ── RELANCES (suivi du recouvrement) ──────────────────────────
+CREATE TABLE IF NOT EXISTS relances (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  vente_id    UUID NOT NULL REFERENCES ventes(id) ON DELETE CASCADE,
+  date        DATE NOT NULL DEFAULT CURRENT_DATE,
+  created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_relances_vente ON relances(vente_id);
+
+-- ── PRODUITS (catalogue gamme riz : prix/coût/tendance) ───────
+CREATE TABLE IF NOT EXISTS produits (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  ref         VARCHAR(40) NOT NULL,
+  nom         VARCHAR(100) NOT NULL,
+  prix_kg     NUMERIC(10,2) DEFAULT 0,
+  cout_kg     NUMERIC(10,2) DEFAULT 0,
+  tendance    VARCHAR(20) DEFAULT 'stable' CHECK (tendance IN ('hausse','stable','déclin')),
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(user_id, ref)
+);
+
+-- ── ACTIVITÉS (journal terrain) ───────────────────────────────
+CREATE TABLE IF NOT EXISTS activites (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  date        DATE NOT NULL DEFAULT CURRENT_DATE,
+  type        VARCHAR(30) NOT NULL CHECK (type IN (
+                'Visite client','Appel','Réunion','Démonstration',
+                'Négociation','Relance','Contrat signé')),
+  cible       VARCHAR(150),
+  resultat    VARCHAR(20) DEFAULT 'Neutre' CHECK (resultat IN ('Positif','Négatif','Neutre')),
+  note        TEXT,
+  created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_activites_user ON activites(user_id, date DESC);
+
+-- ── ALERTES TRAITÉES (état persistant, remplace le localStorage) ─
+CREATE TABLE IF NOT EXISTS alertes_traitees (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  alerte_key  VARCHAR(300) NOT NULL,
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(user_id, alerte_key)
 );
 
 -- ── PILOTAGE HEBDOMADAIRE ─────────────────────────────────────

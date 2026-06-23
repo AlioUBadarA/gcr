@@ -7,16 +7,22 @@ const router = express.Router();
 router.use(auth, attachScopeIds);
 
 const STATUTS = ['Paye','En cours','En retard'];
+const MODES   = ['Espèces','Virement','Chèque','Mobile Money'];
 
 // GET /api/ventes  (avec filtres)
 router.get('/', async (req, res) => {
   try {
     const { mois, annee, statut, client_id, limit = 200, offset = 0 } = req.query;
     const ids = req.scopeIds;
-    let q = `SELECT v.*, c.type as client_type, u.nom as vendeur_nom
+    let q = `SELECT v.*, c.type as client_type, u.nom as vendeur_nom,
+                    COALESCE(ve.total_verse, 0) AS total_verse,
+                    COALESCE(rl.nb_relances, 0) AS nb_relances,
+                    rl.derniere_relance
              FROM ventes v
              LEFT JOIN clients c ON v.client_id = c.id
              LEFT JOIN users u ON u.id = v.user_id
+             LEFT JOIN (SELECT vente_id, SUM(montant) AS total_verse FROM versements GROUP BY vente_id) ve ON ve.vente_id = v.id
+             LEFT JOIN (SELECT vente_id, COUNT(*) AS nb_relances, MAX(date) AS derniere_relance FROM relances GROUP BY vente_id) rl ON rl.vente_id = v.id
              WHERE v.user_id = ANY($1::uuid[])`;
     const params = [ids];
 
@@ -49,18 +55,19 @@ router.get('/', async (req, res) => {
 // POST /api/ventes
 router.post('/', async (req, res) => {
   try {
-    const { client_id, client_nom, date_vente, produit, quantite, prix_unitaire, statut_paiement, date_echeance, note } = req.body;
+    const { client_id, client_nom, date_vente, produit, quantite, prix_unitaire, statut_paiement, date_echeance, mode, note } = req.body;
     if (!client_nom || !date_vente || !produit || !quantite || !prix_unitaire)
       return res.status(400).json({ error: 'Champs requis : client_nom, date_vente, produit, quantite, prix_unitaire' });
     if (quantite <= 0 || prix_unitaire <= 0)
       return res.status(400).json({ error: 'Quantite et prix doivent etre positifs' });
+    if (mode && !MODES.includes(mode)) return res.status(400).json({ error: 'Mode de paiement invalide' });
 
     const result = await pool.query(
-      `INSERT INTO ventes (user_id, client_id, client_nom, date_vente, produit, quantite, prix_unitaire, statut_paiement, date_echeance, note)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+      `INSERT INTO ventes (user_id, client_id, client_nom, date_vente, produit, quantite, prix_unitaire, statut_paiement, date_echeance, mode, note)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
       [req.userId, client_id || null, client_nom.trim(), date_vente, produit,
        +quantite, +prix_unitaire, statut_paiement || 'En cours',
-       date_echeance || null, note || null]
+       date_echeance || null, mode || null, note || null]
     );
 
     // Si client_id fourni, passer statut a Actif
@@ -95,20 +102,21 @@ router.get('/:id', async (req, res) => {
 // PUT /api/ventes/:id
 router.put('/:id', async (req, res) => {
   try {
-    const { client_id, client_nom, date_vente, produit, quantite, prix_unitaire, statut_paiement, date_echeance, note } = req.body;
+    const { client_id, client_nom, date_vente, produit, quantite, prix_unitaire, statut_paiement, date_echeance, mode, note } = req.body;
     if (statut_paiement && !STATUTS.includes(statut_paiement))
       return res.status(400).json({ error: 'Statut invalide' });
+    if (mode && !MODES.includes(mode)) return res.status(400).json({ error: 'Mode de paiement invalide' });
 
     const ids = req.scopeIds;
     const result = await pool.query(
       `UPDATE ventes SET
          client_id=$1, client_nom=$2, date_vente=$3, produit=$4,
          quantite=$5, prix_unitaire=$6, statut_paiement=$7,
-         date_echeance=$8, note=$9
-       WHERE id=$10 AND user_id = ANY($11::uuid[]) RETURNING *`,
+         date_echeance=$8, mode=$9, note=$10
+       WHERE id=$11 AND user_id = ANY($12::uuid[]) RETURNING *`,
       [client_id || null, client_nom, date_vente, produit,
        +quantite, +prix_unitaire, statut_paiement,
-       date_echeance || null, note || null,
+       date_echeance || null, mode || null, note || null,
        req.params.id, ids]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Vente non trouvee' });
@@ -131,6 +139,63 @@ router.patch('/:id/statut', async (req, res) => {
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Vente non trouvee' });
     res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// GET /api/ventes/:id/versements
+router.get('/:id/versements', async (req, res) => {
+  try {
+    const ids = req.scopeIds;
+    const owns = await pool.query('SELECT id FROM ventes WHERE id=$1 AND user_id = ANY($2::uuid[])', [req.params.id, ids]);
+    if (!owns.rows.length) return res.status(404).json({ error: 'Vente non trouvee' });
+    const result = await pool.query('SELECT * FROM versements WHERE vente_id=$1 ORDER BY date DESC, created_at DESC', [req.params.id]);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// POST /api/ventes/:id/versements — enregistrer un encaissement (paiement échelonné)
+router.post('/:id/versements', async (req, res) => {
+  try {
+    const { montant, mode, date } = req.body;
+    if (!montant || montant <= 0) return res.status(400).json({ error: 'Montant requis et positif' });
+    if (mode && !MODES.includes(mode)) return res.status(400).json({ error: 'Mode de paiement invalide' });
+
+    const ids = req.scopeIds;
+    const venteR = await pool.query('SELECT * FROM ventes WHERE id=$1 AND user_id = ANY($2::uuid[])', [req.params.id, ids]);
+    if (!venteR.rows.length) return res.status(404).json({ error: 'Vente non trouvee' });
+
+    const result = await pool.query(
+      `INSERT INTO versements (vente_id, montant, mode, date) VALUES ($1,$2,$3,$4) RETURNING *`,
+      [req.params.id, +montant, mode || null, date || new Date().toISOString().slice(0, 10)]
+    );
+
+    // Si le total encaissé couvre le montant de la vente, on la marque payée.
+    const totalR = await pool.query('SELECT COALESCE(SUM(montant),0) AS total FROM versements WHERE vente_id=$1', [req.params.id]);
+    if (+totalR.rows[0].total >= +venteR.rows[0].montant) {
+      await pool.query("UPDATE ventes SET statut_paiement='Paye' WHERE id=$1", [req.params.id]);
+    }
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error('POST versements:', err.message);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// POST /api/ventes/:id/relances — enregistrer une relance de créance
+router.post('/:id/relances', async (req, res) => {
+  try {
+    const ids = req.scopeIds;
+    const owns = await pool.query('SELECT id FROM ventes WHERE id=$1 AND user_id = ANY($2::uuid[])', [req.params.id, ids]);
+    if (!owns.rows.length) return res.status(404).json({ error: 'Vente non trouvee' });
+    const result = await pool.query(
+      `INSERT INTO relances (vente_id, date) VALUES ($1, $2) RETURNING *`,
+      [req.params.id, req.body.date || new Date().toISOString().slice(0, 10)]
+    );
+    res.status(201).json(result.rows[0]);
   } catch (err) {
     res.status(500).json({ error: 'Erreur serveur' });
   }

@@ -41,15 +41,15 @@ router.get('/', async (req, res) => {
 // POST /api/clients
 router.post('/', async (req, res) => {
   try {
-    const { nom, type, statut, zone, telephone, volume_estime, frequence, valorise, horaire, note } = req.body;
+    const { nom, type, statut, zone, region, segment, potentiel_annuel, telephone, volume_estime, frequence, valorise, horaire, note } = req.body;
     if (!nom || !type) return res.status(400).json({ error: 'Nom et type requis' });
     if (!TYPES_VALIDES.includes(type)) return res.status(400).json({ error: 'Type invalide' });
 
     const result = await pool.query(
-      `INSERT INTO clients (user_id, nom, type, statut, zone, telephone, volume_estime, frequence, valorise, horaire, note)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
-      [req.userId, nom.trim(), type, statut || 'Prospect', zone || null, telephone || null,
-       volume_estime || 0, frequence || null, valorise || null, horaire || null, note || null]
+      `INSERT INTO clients (user_id, nom, type, statut, zone, region, segment, potentiel_annuel, telephone, volume_estime, frequence, valorise, horaire, note)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
+      [req.userId, nom.trim(), type, statut || 'Prospect', zone || null, region || null, segment || null,
+       potentiel_annuel || 0, telephone || null, volume_estime || 0, frequence || null, valorise || null, horaire || null, note || null]
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
@@ -76,17 +76,17 @@ router.get('/:id', async (req, res) => {
 // PUT /api/clients/:id
 router.put('/:id', async (req, res) => {
   try {
-    const { nom, type, statut, zone, telephone, volume_estime, frequence, valorise, horaire, note } = req.body;
+    const { nom, type, statut, zone, region, segment, potentiel_annuel, telephone, volume_estime, frequence, valorise, horaire, note } = req.body;
     if (type && !TYPES_VALIDES.includes(type)) return res.status(400).json({ error: 'Type invalide' });
     if (statut && !STATUTS_VALIDES.includes(statut)) return res.status(400).json({ error: 'Statut invalide' });
 
     const ids = req.scopeIds;
     const result = await pool.query(
       `UPDATE clients SET
-         nom=$1, type=$2, statut=$3, zone=$4, telephone=$5,
-         volume_estime=$6, frequence=$7, valorise=$8, horaire=$9, note=$10
-       WHERE id=$11 AND user_id = ANY($12::uuid[]) RETURNING *`,
-      [nom, type, statut, zone || null, telephone || null,
+         nom=$1, type=$2, statut=$3, zone=$4, region=$5, segment=$6, potentiel_annuel=$7, telephone=$8,
+         volume_estime=$9, frequence=$10, valorise=$11, horaire=$12, note=$13
+       WHERE id=$14 AND user_id = ANY($15::uuid[]) RETURNING *`,
+      [nom, type, statut, zone || null, region || null, segment || null, potentiel_annuel || 0, telephone || null,
        volume_estime || 0, frequence || null, valorise || null, horaire || null, note || null,
        req.params.id, ids]
     );

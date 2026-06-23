@@ -54,6 +54,10 @@ app.use('/api/actions',     require('./routes/actions'));
 app.use('/api/rentabilite', require('./routes/rentabilite'));
 app.use('/api/emplois',     require('./routes/emplois'));
 app.use('/api/contrats',    require('./routes/contrats'));
+app.use('/api/managers',    require('./routes/managers'));
+app.use('/api/produits',    require('./routes/produits'));
+app.use('/api/activites',   require('./routes/activites'));
+app.use('/api/journal',     require('./routes/journal'));
 
 // ── 404 ───────────────────────────────────────────────────────
 app.use((req, res) => {
