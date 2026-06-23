@@ -139,13 +139,9 @@ async function runMigrations() {
        EXCEPTION WHEN duplicate_object THEN NULL; END;
      END $$`,
     // Relabellise le pipeline de prospection à l'identique du HTML de référence
-    // (Nouveau/Qualifié/Proposition/Négociation/Gagné/Perdu) — mappe les anciennes
-    // valeurs avant de remplacer la contrainte, pour ne pas casser les lignes existantes.
-    `UPDATE prospection SET statut = 'Qualifié'    WHERE statut = 'En contact'`,
-    `UPDATE prospection SET statut = 'Proposition' WHERE statut = 'Présentation faite'`,
-    `UPDATE prospection SET statut = 'Négociation' WHERE statut = 'Devis envoyé'`,
-    `ALTER TABLE prospection ADD COLUMN IF NOT EXISTS region VARCHAR(100)`,
-    `ALTER TABLE prospection ADD COLUMN IF NOT EXISTS source VARCHAR(50)`,
+    // (Nouveau/Qualifié/Proposition/Négociation/Gagné/Perdu). On relâche d'abord la
+    // contrainte existante (quel que soit son nom réel) avant de remapper les anciennes
+    // valeurs, pour ne pas violer le CHECK pendant la migration des lignes existantes.
     `DO $$
      DECLARE c TEXT;
      BEGIN
@@ -153,11 +149,15 @@ async function runMigrations() {
        WHERE conrelid = 'prospection'::regclass AND contype = 'c'
          AND pg_get_constraintdef(oid) LIKE '%statut%' LIMIT 1;
        IF c IS NOT NULL THEN EXECUTE format('ALTER TABLE prospection DROP CONSTRAINT %I', c); END IF;
-       BEGIN
-         ALTER TABLE prospection ADD CONSTRAINT prospection_statut_check
-           CHECK (statut IN ('Nouveau','Qualifié','Proposition','Négociation','Gagné','Perdu'));
-       EXCEPTION WHEN duplicate_object THEN NULL; END;
      END $$`,
+    `ALTER TABLE prospection DROP CONSTRAINT IF EXISTS prospection_statut_check`,
+    `UPDATE prospection SET statut = 'Qualifié'    WHERE statut = 'En contact'`,
+    `UPDATE prospection SET statut = 'Proposition' WHERE statut = 'Présentation faite'`,
+    `UPDATE prospection SET statut = 'Négociation' WHERE statut = 'Devis envoyé'`,
+    `ALTER TABLE prospection ADD COLUMN IF NOT EXISTS region VARCHAR(100)`,
+    `ALTER TABLE prospection ADD COLUMN IF NOT EXISTS source VARCHAR(50)`,
+    `ALTER TABLE prospection ADD CONSTRAINT prospection_statut_check
+       CHECK (statut IN ('Nouveau','Qualifié','Proposition','Négociation','Gagné','Perdu'))`,
     `ALTER TABLE clients ADD COLUMN IF NOT EXISTS region VARCHAR(100)`,
     `ALTER TABLE clients ADD COLUMN IF NOT EXISTS segment VARCHAR(100)`,
     `ALTER TABLE clients ADD COLUMN IF NOT EXISTS potentiel_annuel NUMERIC(14,2) DEFAULT 0`,
