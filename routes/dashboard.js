@@ -120,9 +120,9 @@ router.get('/', async (req, res) => {
 
       pool.query(`
         SELECT
-          (SELECT COUNT(*) FROM prospection WHERE user_id = ANY($1::uuid[]) AND statut='Gagné' AND EXTRACT(YEAR FROM updated_at)=$2)  AS gagnes,
-          (SELECT COUNT(*) FROM prospection WHERE user_id = ANY($1::uuid[]) AND statut='Perdu' AND EXTRACT(YEAR FROM updated_at)=$2)  AS perdus,
-          (SELECT COUNT(*) FROM contrats_clients WHERE user_id = ANY($1::uuid[]) AND date_debut >= make_date($2,1,1))                  AS nouveaux_contrats,
+          (SELECT COUNT(*) FROM prospection WHERE user_id = ANY($1::uuid[]) AND statut='Gagné' AND EXTRACT(YEAR FROM updated_at)=$2::int)  AS gagnes,
+          (SELECT COUNT(*) FROM prospection WHERE user_id = ANY($1::uuid[]) AND statut='Perdu' AND EXTRACT(YEAR FROM updated_at)=$2::int)  AS perdus,
+          (SELECT COUNT(*) FROM contrats_clients WHERE user_id = ANY($1::uuid[]) AND date_debut >= make_date($2::int,1,1))                  AS nouveaux_contrats,
           (SELECT COUNT(*) FROM ventes WHERE user_id = ANY($1::uuid[]) AND statut_paiement='En retard')                                AS cmd_retard,
           (SELECT COALESCE(SUM(valeur_estimee),0) FROM prospection WHERE user_id = ANY($1::uuid[]) AND statut NOT IN ('Gagné','Perdu')) AS pipeline_espere,
           (SELECT COUNT(*) FROM prospection WHERE user_id = ANY($1::uuid[]) AND statut NOT IN ('Gagné','Perdu'))                        AS pipeline_nb
