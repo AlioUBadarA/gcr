@@ -163,7 +163,7 @@ router.get('/users', async (req, res) => {
 // GET /api/admin/users/:id — profil complet + ventes + clients + équipe vendeurs
 router.get('/users/:id', async (req, res) => {
   try {
-    const [userR, ventesR, clientsR, pilotageR, vendeursR] = await Promise.all([
+    const [userR, ventesR, clientsR, pilotageR, vendeursR, managersR] = await Promise.all([
       pool.query(
         `SELECT id, nom, email, rizerie, telephone, ville, role,
                 suspended, suspended_reason, suspended_at, created_at
@@ -186,14 +186,20 @@ router.get('/users/:id', async (req, res) => {
         [req.params.id]
       ),
       pool.query(
-        `SELECT u.id, u.nom, u.email, u.telephone, u.suspended, u.created_at,
+        `SELECT u.id, u.nom, u.email, u.telephone, u.suspended, u.created_at, u.parent_id,
+                m.nom AS manager_nom,
                 COUNT(DISTINCT v.id) AS nb_ventes,
                 COALESCE(SUM(v.montant),0) AS ca_total,
                 MAX(v.date_vente) AS derniere_vente
          FROM users u
+         LEFT JOIN users m ON m.id = u.parent_id AND m.role = 'manager'
          LEFT JOIN ventes v ON v.user_id = u.id
-         WHERE u.parent_id = $1 AND u.role = 'vendeur'
-         GROUP BY u.id ORDER BY u.nom`,
+         WHERE u.role = 'vendeur' AND (u.parent_id = $1 OR u.parent_id IN (SELECT id FROM users WHERE parent_id = $1 AND role = 'manager'))
+         GROUP BY u.id, m.nom ORDER BY u.nom`,
+        [req.params.id]
+      ),
+      pool.query(
+        `SELECT id, nom, email, zone, created_at FROM users WHERE parent_id = $1 AND role = 'manager' ORDER BY nom`,
         [req.params.id]
       ),
     ]);
@@ -201,6 +207,7 @@ router.get('/users/:id', async (req, res) => {
 
     res.json({
       user:      userR.rows[0],
+      managers:  managersR.rows,
       ventes:    ventesR.rows,
       clients:   clientsR.rows,
       pilotage:  pilotageR.rows,
@@ -212,7 +219,7 @@ router.get('/users/:id', async (req, res) => {
   }
 });
 
-// POST /api/admin/users/:id/vendeurs — créer un vendeur pour un rizier
+// POST /api/admin/users/:id/vendeurs — créer un vendeur ou un manager pour un rizier
 router.post('/users/:id/vendeurs', async (req, res) => {
   try {
     const rizierR = await pool.query(
@@ -220,23 +227,32 @@ router.post('/users/:id/vendeurs', async (req, res) => {
     );
     if (!rizierR.rows.length) return res.status(404).json({ error: 'Rizier non trouvé' });
 
-    const { nom, email, password, telephone } = req.body;
+    const { nom, email, password, telephone, role, zone, manager_id } = req.body;
     if (!nom || !email || !password)
       return res.status(400).json({ error: 'Nom, email et mot de passe requis' });
     if (password.length < 6)
       return res.status(400).json({ error: 'Mot de passe : 6 caractères minimum' });
+    const wantsManager = role === 'manager';
 
     const exists = await pool.query('SELECT id FROM users WHERE email=$1', [email.toLowerCase()]);
     if (exists.rows.length) return res.status(409).json({ error: 'Cet email est déjà utilisé' });
 
+    let parentId = req.params.id;
+    if (!wantsManager && manager_id) {
+      const mgr = await pool.query(`SELECT id FROM users WHERE id=$1 AND parent_id=$2 AND role='manager'`, [manager_id, req.params.id]);
+      if (!mgr.rows.length) return res.status(400).json({ error: 'Manager invalide' });
+      parentId = manager_id;
+    }
+
     const hash = await bcrypt.hash(password, 12);
     const result = await pool.query(
-      `INSERT INTO users (nom, email, password, telephone, role, parent_id)
-       VALUES ($1,$2,$3,$4,'vendeur',$5)
-       RETURNING id, nom, email, telephone, role, created_at`,
-      [nom.trim(), email.toLowerCase().trim(), hash, telephone || null, req.params.id]
+      `INSERT INTO users (nom, email, password, telephone, role, parent_id, zone)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
+       RETURNING id, nom, email, telephone, role, zone, parent_id, created_at`,
+      [nom.trim(), email.toLowerCase().trim(), hash, telephone || null,
+       wantsManager ? 'manager' : 'vendeur', parentId, wantsManager ? (zone || null) : null]
     );
-    await log(req.userId, req.userNom, 'VENDEUR_CREATED',
+    await log(req.userId, req.userNom, wantsManager ? 'MANAGER_CREATED' : 'VENDEUR_CREATED',
               result.rows[0], { rizier: rizierR.rows[0].nom, email }, req.ip);
     res.status(201).json(result.rows[0]);
   } catch (err) {
