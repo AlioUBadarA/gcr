@@ -142,13 +142,19 @@ async function runMigrations() {
     // (Nouveau/Qualifié/Proposition/Négociation/Gagné/Perdu). On relâche d'abord la
     // contrainte existante (quel que soit son nom réel) avant de remapper les anciennes
     // valeurs, pour ne pas violer le CHECK pendant la migration des lignes existantes.
+    // Détection par colonne réelle (pg_attribute.attname) plutôt que par correspondance
+    // textuelle sur la définition — fiable quel que soit le nom auto-généré de la contrainte.
     `DO $$
-     DECLARE c TEXT;
+     DECLARE conrec RECORD;
      BEGIN
-       SELECT conname INTO c FROM pg_constraint
-       WHERE conrelid = 'prospection'::regclass AND contype = 'c'
-         AND pg_get_constraintdef(oid) LIKE '%statut%' LIMIT 1;
-       IF c IS NOT NULL THEN EXECUTE format('ALTER TABLE prospection DROP CONSTRAINT %I', c); END IF;
+       FOR conrec IN
+         SELECT con.conname
+         FROM pg_constraint con
+         JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = ANY(con.conkey)
+         WHERE con.conrelid = 'prospection'::regclass AND con.contype = 'c' AND att.attname = 'statut'
+       LOOP
+         EXECUTE format('ALTER TABLE prospection DROP CONSTRAINT %I', conrec.conname);
+       END LOOP;
      END $$`,
     `ALTER TABLE prospection DROP CONSTRAINT IF EXISTS prospection_statut_check`,
     `UPDATE prospection SET statut = 'Qualifié'    WHERE statut = 'En contact'`,
@@ -156,8 +162,11 @@ async function runMigrations() {
     `UPDATE prospection SET statut = 'Négociation' WHERE statut = 'Devis envoyé'`,
     `ALTER TABLE prospection ADD COLUMN IF NOT EXISTS region VARCHAR(100)`,
     `ALTER TABLE prospection ADD COLUMN IF NOT EXISTS source VARCHAR(50)`,
-    `ALTER TABLE prospection ADD CONSTRAINT prospection_statut_check
-       CHECK (statut IN ('Nouveau','Qualifié','Proposition','Négociation','Gagné','Perdu'))`,
+    `DO $$
+     BEGIN
+       ALTER TABLE prospection ADD CONSTRAINT prospection_statut_check
+         CHECK (statut IN ('Nouveau','Qualifié','Proposition','Négociation','Gagné','Perdu'));
+     EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
     `ALTER TABLE clients ADD COLUMN IF NOT EXISTS region VARCHAR(100)`,
     `ALTER TABLE clients ADD COLUMN IF NOT EXISTS segment VARCHAR(100)`,
     `ALTER TABLE clients ADD COLUMN IF NOT EXISTS potentiel_annuel NUMERIC(14,2) DEFAULT 0`,
