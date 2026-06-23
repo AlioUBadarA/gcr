@@ -77,7 +77,7 @@ router.get('/', async (req, res) => {
                COALESCE(SUM(v.quantite*COALESCE(NULLIF(v.cout_unitaire,0),0)),0) AS cout_reel,
                MAX(p.tendance) AS tendance
         FROM ventes v
-        LEFT JOIN produits p ON p.user_id = v.user_id AND p.nom = v.produit
+        LEFT JOIN produits p ON p.user_id = ANY($1::uuid[]) AND p.nom = v.produit
         WHERE v.user_id = ANY($1::uuid[]) AND EXTRACT(YEAR FROM v.date_vente) = $2
         GROUP BY v.produit ORDER BY ca DESC
       `, [ids, annee]),
