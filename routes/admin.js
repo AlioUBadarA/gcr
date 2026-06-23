@@ -496,6 +496,74 @@ router.delete('/support/:id', requireSuperadmin, async (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════════
+// COMPTES SUPERADMIN — seul un vrai superadmin peut en créer ou en
+// supprimer un autre (même restriction que pour les comptes support).
+// ══════════════════════════════════════════════════════════════
+
+// GET /api/admin/superadmins
+router.get('/superadmins', requireSuperadmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, nom, email, created_at FROM users WHERE role = 'superadmin' ORDER BY created_at DESC`
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error('GET superadmins:', err.message);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// POST /api/admin/superadmins
+router.post('/superadmins', requireSuperadmin, async (req, res) => {
+  try {
+    const { nom, email, password } = req.body;
+    if (!nom || !email || !password)
+      return res.status(400).json({ error: 'Nom, email et mot de passe requis' });
+    if (password.length < 12)
+      return res.status(400).json({ error: 'Mot de passe : 12 caractères minimum' });
+
+    const exists = await pool.query('SELECT id FROM users WHERE email=$1', [email.toLowerCase()]);
+    if (exists.rows.length) return res.status(409).json({ error: 'Cet email est déjà utilisé' });
+
+    const hash = await bcrypt.hash(password, 12);
+    const result = await pool.query(
+      `INSERT INTO users (nom, email, password, role)
+       VALUES ($1,$2,$3,'superadmin')
+       RETURNING id, nom, email, created_at`,
+      [nom.trim(), email.toLowerCase().trim(), hash]
+    );
+    await log(req.userId, req.userNom, 'SUPERADMIN_CREATED', result.rows[0], { email }, req.ip);
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error('POST superadmins:', err.message);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// DELETE /api/admin/superadmins/:id
+router.delete('/superadmins/:id', requireSuperadmin, async (req, res) => {
+  try {
+    if (req.params.id === req.userId)
+      return res.status(400).json({ error: 'Impossible de supprimer son propre compte' });
+
+    const countR = await pool.query(`SELECT COUNT(*) FROM users WHERE role='superadmin'`);
+    if (Number(countR.rows[0].count) <= 1)
+      return res.status(400).json({ error: 'Impossible : il doit rester au moins un compte superadmin' });
+
+    const result = await pool.query(
+      `DELETE FROM users WHERE id=$1 AND role='superadmin' RETURNING id, nom, email`
+    , [req.params.id]);
+    if (!result.rows.length) return res.status(404).json({ error: 'Compte superadmin non trouvé' });
+
+    await log(req.userId, req.userNom, 'SUPERADMIN_DELETED', result.rows[0], { email: result.rows[0].email }, req.ip);
+    res.json({ message: 'Compte superadmin supprimé' });
+  } catch (err) {
+    console.error('DELETE superadmins:', err.message);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════
 // AUDIT LOG
 // ══════════════════════════════════════════════════════════════
 
