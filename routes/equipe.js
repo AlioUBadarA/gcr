@@ -75,8 +75,8 @@ router.post('/', canManage, async (req, res) => {
     const { nom, email, password, telephone, role, zone, manager_id } = req.body;
     if (!nom || !email || !password)
       return res.status(400).json({ error: 'Nom, email et mot de passe requis' });
-    if (password.length < 6)
-      return res.status(400).json({ error: 'Mot de passe : 6 caractères minimum' });
+    if (password.length < 12)
+      return res.status(400).json({ error: 'Mot de passe : 12 caractères minimum' });
 
     const wantsManager = role === 'manager';
     if (wantsManager && req.userRole !== 'rizier')
@@ -131,8 +131,8 @@ router.put('/:id', canManage, attachScopeIds, async (req, res) => {
 router.patch('/:id/password', canManage, attachScopeIds, async (req, res) => {
   try {
     const { new_password } = req.body;
-    if (!new_password || new_password.length < 6)
-      return res.status(400).json({ error: 'Mot de passe : 6 caractères minimum' });
+    if (!new_password || new_password.length < 12)
+      return res.status(400).json({ error: 'Mot de passe : 12 caractères minimum' });
     const hash = await bcrypt.hash(new_password, 12);
     const result = await pool.query(
       `UPDATE users SET password=$1

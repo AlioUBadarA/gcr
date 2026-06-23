@@ -2,6 +2,10 @@
 
 Backend Node.js/Express pour la plateforme de pilotage commercial PFS.
 
+> Le frontend (React/Vite) vit dans un dépôt séparé (`pfs-cockpit`). Ce backend est déjà déployé sur Render ; consultez votre dashboard Render pour les noms de service et URLs réels — les exemples ci-dessous utilisent des placeholders génériques.
+>
+> Cette doc ne liste qu'un sous-ensemble des endpoints (auth, clients, ventes, pilotage, dashboard) à titre d'exemple. Toutes les autres ressources (`routes/*.js` : produits, contrats, prospection, emplois, encaissements, admin, etc.) suivent le même pattern REST + JWT.
+
 ## Stack
 
 - **Node.js** + **Express** - serveur API REST
@@ -37,9 +41,9 @@ git push -u origin main
 ### 3. Deployer le backend sur Render
 
 1. **New** > **Web Service**
-2. Connecter votre repo GitHub `pfs-backend`
+2. Connecter votre repo GitHub backend
 3. Parametres :
-   - **Name** : `pfs-api`
+   - **Name** : au choix (ex: `pfs-api`)
    - **Environment** : `Node`
    - **Build Command** : `npm install`
    - **Start Command** : `npm start`
@@ -61,7 +65,7 @@ Le schema SQL s'initialise automatiquement au premier demarrage.
 
 | Methode | Endpoint | Description |
 |---------|----------|-------------|
-| POST | `/api/auth/register` | Creer un compte |
+| POST | `/api/auth/register` | Désactivé — renvoie 403 (les comptes sont créés par le superadmin via `/api/admin/users`) |
 | POST | `/api/auth/login` | Se connecter |
 | GET | `/api/auth/me` | Profil courant |
 | PUT | `/api/auth/me` | Modifier profil |
@@ -113,23 +117,18 @@ Le schema SQL s'initialise automatiquement au premier demarrage.
 
 ## Exemples de requetes
 
-### Register
-```bash
-curl -X POST https://pfs-api.onrender.com/api/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"nom":"Mamadou Diallo","email":"mamadou@example.com","password":"secret123","rizerie":"Rizerie du Fleuve"}'
-```
+Remplacez `https://votre-backend.onrender.com` par l'URL réelle de votre service Render.
 
 ### Login
 ```bash
-curl -X POST https://pfs-api.onrender.com/api/auth/login \
+curl -X POST https://votre-backend.onrender.com/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"mamadou@example.com","password":"secret123"}'
 ```
 
 ### Ajouter un client (avec token)
 ```bash
-curl -X POST https://pfs-api.onrender.com/api/clients \
+curl -X POST https://votre-backend.onrender.com/api/clients \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer VOTRE_TOKEN" \
   -d '{"nom":"Modou Diop","type":"Grossiste","statut":"Prospect","zone":"Marche Tilene","volume_estime":2000}'
@@ -137,7 +136,7 @@ curl -X POST https://pfs-api.onrender.com/api/clients \
 
 ### Enregistrer une vente
 ```bash
-curl -X POST https://pfs-api.onrender.com/api/ventes \
+curl -X POST https://votre-backend.onrender.com/api/ventes \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer VOTRE_TOKEN" \
   -d '{"client_nom":"Modou Diop","date_vente":"2026-06-08","produit":"Riz blanc 25kg","quantite":100,"prix_unitaire":450,"statut_paiement":"En cours"}'

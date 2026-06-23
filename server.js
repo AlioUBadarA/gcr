@@ -11,6 +11,9 @@ const PORT = process.env.PORT || 3000;
 // ── Securite ──────────────────────────────────────────────────
 app.set('trust proxy', 1); // Render passe par un reverse proxy
 app.use(helmet());
+if (process.env.NODE_ENV === 'production' && !process.env.FRONTEND_URL) {
+  console.warn('ATTENTION: FRONTEND_URL non definie en production - CORS retombe sur "*" (toutes origines autorisees).');
+}
 app.use(cors({
   origin: process.env.FRONTEND_URL || '*',
   methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],

@@ -287,7 +287,7 @@ async function runMigrations() {
     try {
       const bcrypt = require('bcryptjs');
       console.log('[MIG] Hachage du mot de passe...');
-      const hash = await bcrypt.hash(password, 10);
+      const hash = await bcrypt.hash(password, 12);
       console.log('[MIG] Hash OK, upsert en cours...');
 
       await pool.query(`

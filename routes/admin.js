@@ -238,8 +238,8 @@ router.post('/users/:id/vendeurs', async (req, res) => {
     const { nom, email, password, telephone, role, zone, manager_id } = req.body;
     if (!nom || !email || !password)
       return res.status(400).json({ error: 'Nom, email et mot de passe requis' });
-    if (password.length < 6)
-      return res.status(400).json({ error: 'Mot de passe : 6 caractères minimum' });
+    if (password.length < 12)
+      return res.status(400).json({ error: 'Mot de passe : 12 caractères minimum' });
     const wantsManager = role === 'manager';
 
     const exists = await pool.query('SELECT id FROM users WHERE email=$1', [email.toLowerCase()]);
@@ -275,8 +275,8 @@ router.post('/users', async (req, res) => {
     const { nom, email, password, rizerie_id, telephone, ville } = req.body;
     if (!nom || !email || !password)
       return res.status(400).json({ error: 'Nom, email et mot de passe requis' });
-    if (password.length < 6)
-      return res.status(400).json({ error: 'Mot de passe : 6 caractères minimum' });
+    if (password.length < 12)
+      return res.status(400).json({ error: 'Mot de passe : 12 caractères minimum' });
 
     const exists = await pool.query('SELECT id FROM users WHERE email=$1', [email.toLowerCase()]);
     if (exists.rows.length) return res.status(409).json({ error: 'Cet email est déjà utilisé' });
@@ -355,8 +355,8 @@ router.patch('/users/:id/suspend', async (req, res) => {
 router.patch('/users/:id/password', async (req, res) => {
   try {
     const { new_password } = req.body;
-    if (!new_password || new_password.length < 6)
-      return res.status(400).json({ error: 'Mot de passe : 6 caractères minimum' });
+    if (!new_password || new_password.length < 12)
+      return res.status(400).json({ error: 'Mot de passe : 12 caractères minimum' });
 
     const hash = await bcrypt.hash(new_password, 12);
     const result = await pool.query(
@@ -455,8 +455,8 @@ router.post('/support', requireSuperadmin, async (req, res) => {
     const { nom, email, password } = req.body;
     if (!nom || !email || !password)
       return res.status(400).json({ error: 'Nom, email et mot de passe requis' });
-    if (password.length < 6)
-      return res.status(400).json({ error: 'Mot de passe : 6 caractères minimum' });
+    if (password.length < 12)
+      return res.status(400).json({ error: 'Mot de passe : 12 caractères minimum' });
 
     const exists = await pool.query('SELECT id FROM users WHERE email=$1', [email.toLowerCase()]);
     if (exists.rows.length) return res.status(409).json({ error: 'Cet email est déjà utilisé' });

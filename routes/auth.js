@@ -12,43 +12,6 @@ router.post('/register', (req, res) => {
   });
 });
 
-// Ancienne implémentation conservée mais inaccessible
-router.post('/register-disabled', async (req, res) => {
-  try {
-    const { nom, email, password, rizerie, telephone, ville } = req.body;
-
-    if (!nom || !email || !password)
-      return res.status(400).json({ error: 'Nom, email et mot de passe requis' });
-
-    if (password.length < 6)
-      return res.status(400).json({ error: 'Mot de passe : 6 caracteres minimum' });
-
-    const exists = await pool.query('SELECT id FROM users WHERE email = $1', [email.toLowerCase()]);
-    if (exists.rows.length)
-      return res.status(409).json({ error: 'Cet email est deja utilise' });
-
-    const hash = await bcrypt.hash(password, 12);
-    const result = await pool.query(
-      `INSERT INTO users (nom, email, password, rizerie, telephone, ville)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING id, nom, email, rizerie, telephone, ville, role, created_at`,
-      [nom.trim(), email.toLowerCase().trim(), hash, rizerie || null, telephone || null, ville || null]
-    );
-
-    const user = result.rows[0];
-    const token = jwt.sign(
-      { userId: user.id, nom: user.nom, role: user.role },
-      process.env.JWT_SECRET,
-      { expiresIn: '30d' }
-    );
-
-    res.status(201).json({ token, user: { id: user.id, nom: user.nom, email: user.email, rizerie: user.rizerie, telephone: user.telephone, ville: user.ville, role: user.role } });
-  } catch (err) {
-    console.error('register:', err.message);
-    res.status(500).json({ error: 'Erreur serveur' });
-  }
-});
-
 // POST /api/auth/login
 router.post('/login', async (req, res) => {
   try {
@@ -74,7 +37,7 @@ router.post('/login', async (req, res) => {
     const token = jwt.sign(
       { userId: user.id, nom: user.nom, role: user.role },
       process.env.JWT_SECRET,
-      { expiresIn: '30d' }
+      { expiresIn: '14d' }
     );
 
     res.json({ token, user: { id: user.id, nom: user.nom, email: user.email, rizerie: user.rizerie, telephone: user.telephone, ville: user.ville, role: user.role } });
