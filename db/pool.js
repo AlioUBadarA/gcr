@@ -217,6 +217,19 @@ async function runMigrations() {
        created_at TIMESTAMPTZ DEFAULT NOW(),
        UNIQUE(user_id, alerte_key)
      )`,
+    // Visites planifiées du pilotage hebdomadaire — plusieurs clients/prospects par jour,
+    // chacun avec son propre commentaire (action à poser), au lieu d'un simple champ texte.
+    `CREATE TABLE IF NOT EXISTS pilotage_visites (
+       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+       user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       semaine VARCHAR(30) NOT NULL,
+       jour VARCHAR(15) NOT NULL,
+       client_id UUID REFERENCES clients(id) ON DELETE CASCADE,
+       prospect_id UUID REFERENCES prospection(id) ON DELETE CASCADE,
+       commentaire TEXT,
+       created_at TIMESTAMPTZ DEFAULT NOW()
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_pilotage_visites_user ON pilotage_visites(user_id, semaine, jour)`,
   ];
 
   for (let i = 0; i < migrations.length; i++) {

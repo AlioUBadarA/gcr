@@ -304,6 +304,20 @@ CREATE TABLE IF NOT EXISTS actions_correctives (
   UNIQUE(user_id, semaine)
 );
 
+-- ── PILOTAGE : VISITES PLANIFIÉES (plusieurs par jour) ────────
+CREATE TABLE IF NOT EXISTS pilotage_visites (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  semaine     VARCHAR(30) NOT NULL,
+  jour        VARCHAR(15) NOT NULL CHECK (jour IN (
+                'Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi')),
+  client_id   UUID REFERENCES clients(id) ON DELETE CASCADE,
+  prospect_id UUID REFERENCES prospection(id) ON DELETE CASCADE,
+  commentaire TEXT,
+  created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_pilotage_visites_user ON pilotage_visites(user_id, semaine, jour);
+
 -- ── INDEX ─────────────────────────────────────────────────────
 CREATE INDEX IF NOT EXISTS idx_ventes_user    ON ventes(user_id);
 CREATE INDEX IF NOT EXISTS idx_ventes_date    ON ventes(date_vente);

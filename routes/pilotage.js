@@ -1,6 +1,7 @@
 const express = require('express');
 const { pool } = require('../db/pool');
 const auth = require('../middleware/auth');
+const { attachScopeIds } = require('../middleware/scope');
 
 const router = express.Router();
 router.use(auth);
@@ -64,6 +65,91 @@ router.put('/:semaine', async (req, res) => {
     res.status(500).json({ error: 'Erreur serveur' });
   } finally {
     client.release();
+  }
+});
+
+// GET /api/pilotage/:semaine/visites — clients/prospects à visiter, avec leurs données
+router.get('/:semaine/visites', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT v.id, v.semaine, v.jour, v.commentaire, v.client_id, v.prospect_id, v.created_at,
+        c.nom AS client_nom, c.statut AS client_statut, c.zone AS client_zone,
+        c.telephone AS client_telephone, c.type AS client_type,
+        (SELECT MAX(date_vente) FROM ventes WHERE client_id = c.id) AS client_derniere_vente,
+        (SELECT COALESCE(SUM(montant),0) FROM ventes WHERE client_id = c.id) AS client_ca_total,
+        p.nom AS prospect_nom, p.statut AS prospect_statut, p.zone AS prospect_zone,
+        p.telephone AS prospect_telephone, p.valeur_estimee AS prospect_valeur_estimee,
+        p.priorite AS prospect_priorite
+      FROM pilotage_visites v
+      LEFT JOIN clients c ON c.id = v.client_id
+      LEFT JOIN prospection p ON p.id = v.prospect_id
+      WHERE v.user_id = $1 AND v.semaine = $2
+      ORDER BY v.created_at`,
+      [req.userId, req.params.semaine]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error('GET pilotage visites:', err.message);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// POST /api/pilotage/:semaine/visites — ajouter un client ou prospect à visiter un jour donné
+router.post('/:semaine/visites', attachScopeIds, async (req, res) => {
+  try {
+    const { jour, client_id, prospect_id, commentaire } = req.body;
+    if (!JOURS.includes(jour)) return res.status(400).json({ error: 'Jour invalide' });
+    if (!client_id && !prospect_id) return res.status(400).json({ error: 'Sélectionnez un client ou un prospect' });
+    if (client_id && prospect_id) return res.status(400).json({ error: 'Un seul de client_id ou prospect_id' });
+
+    if (client_id) {
+      const owns = await pool.query('SELECT id FROM clients WHERE id=$1 AND user_id = ANY($2::uuid[])', [client_id, req.scopeIds]);
+      if (!owns.rows.length) return res.status(404).json({ error: 'Client non trouvé' });
+    } else {
+      const owns = await pool.query('SELECT id FROM prospection WHERE id=$1 AND user_id = ANY($2::uuid[])', [prospect_id, req.scopeIds]);
+      if (!owns.rows.length) return res.status(404).json({ error: 'Prospect non trouvé' });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO pilotage_visites (user_id, semaine, jour, client_id, prospect_id, commentaire)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [req.userId, req.params.semaine, jour, client_id || null, prospect_id || null, commentaire || null]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error('POST pilotage visites:', err.message);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// PUT /api/pilotage/visites/:id — modifier le commentaire (action à poser) ou le jour
+router.put('/visites/:id', async (req, res) => {
+  try {
+    const { commentaire, jour } = req.body;
+    if (jour && !JOURS.includes(jour)) return res.status(400).json({ error: 'Jour invalide' });
+    const result = await pool.query(
+      `UPDATE pilotage_visites SET commentaire=$1, jour=COALESCE($2, jour)
+       WHERE id=$3 AND user_id=$4 RETURNING *`,
+      [commentaire ?? null, jour || null, req.params.id, req.userId]
+    );
+    if (!result.rows.length) return res.status(404).json({ error: 'Visite non trouvée' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// DELETE /api/pilotage/visites/:id
+router.delete('/visites/:id', async (req, res) => {
+  try {
+    const result = await pool.query(
+      'DELETE FROM pilotage_visites WHERE id=$1 AND user_id=$2 RETURNING id',
+      [req.params.id, req.userId]
+    );
+    if (!result.rows.length) return res.status(404).json({ error: 'Visite non trouvée' });
+    res.json({ message: 'Visite supprimée' });
+  } catch (err) {
+    res.status(500).json({ error: 'Erreur serveur' });
   }
 });
 
