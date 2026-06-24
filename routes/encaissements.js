@@ -50,6 +50,26 @@ router.get('/search', async (req, res) => {
   }
 });
 
+// GET /api/encaissements/mois — somme de tous les versements encaissés ce mois (scope)
+router.get('/mois', async (req, res) => {
+  try {
+    const ids = req.scopeIds;
+    const result = await pool.query(
+      `SELECT COALESCE(SUM(v.montant), 0) AS total
+       FROM versements v
+       LEFT JOIN ventes        vt ON vt.id = v.vente_id
+       LEFT JOIN contrats_clients cc ON cc.id = v.contrat_client_id
+       WHERE DATE_TRUNC('month', v.date::date) = DATE_TRUNC('month', CURRENT_DATE)
+         AND (vt.user_id = ANY($1::uuid[]) OR cc.user_id = ANY($1::uuid[]))`,
+      [ids]
+    );
+    res.json({ total: Number(result.rows[0].total) });
+  } catch (err) {
+    console.error('GET encaissements/mois:', err.message);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
 function targetTable(type) {
   if (type === 'vente') return { table: 'ventes', column: 'vente_id' };
   if (type === 'contrat') return { table: 'contrats_clients', column: 'contrat_client_id' };
