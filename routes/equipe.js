@@ -134,6 +134,45 @@ router.put('/:id', canManage, attachScopeIds, async (req, res) => {
   }
 });
 
+// PATCH /api/equipe/:id/manager — réaffecter un commercial à un autre manager
+// Seul le directeur (ou superadmin) peut faire ça.
+router.patch('/:id/manager', attachScopeIds, async (req, res) => {
+  if (!['directeur', 'superadmin'].includes(req.userRole))
+    return res.status(403).json({ error: 'Seul le directeur peut réaffecter un commercial' });
+
+  try {
+    const { manager_id } = req.body;
+    if (!manager_id) return res.status(400).json({ error: 'manager_id requis' });
+
+    // Le commercial doit être dans le périmètre du directeur et être un vendeur
+    const vendeurR = await pool.query(
+      `SELECT id, nom, parent_id FROM users
+       WHERE id=$1 AND id = ANY($2::uuid[]) AND role='vendeur'`,
+      [req.params.id, req.scopeIds]
+    );
+    if (!vendeurR.rows.length)
+      return res.status(404).json({ error: 'Commercial non trouvé dans votre périmètre' });
+
+    // Le manager cible doit aussi être dans le périmètre du directeur
+    const managerR = await pool.query(
+      `SELECT id, nom FROM users
+       WHERE id=$1 AND id = ANY($2::uuid[]) AND role='manager'`,
+      [manager_id, req.scopeIds]
+    );
+    if (!managerR.rows.length)
+      return res.status(400).json({ error: 'Manager invalide ou hors de votre périmètre' });
+
+    const result = await pool.query(
+      `UPDATE users SET parent_id=$1 WHERE id=$2 RETURNING id, nom, parent_id`,
+      [manager_id, req.params.id]
+    );
+    res.json({ ...result.rows[0], manager_nom: managerR.rows[0].nom });
+  } catch (err) {
+    console.error('PATCH equipe manager:', err.message);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
 // PATCH /api/equipe/:id/password
 router.patch('/:id/password', canManage, attachScopeIds, async (req, res) => {
   try {
