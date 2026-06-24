@@ -263,6 +263,26 @@ async function runMigrations() {
     `ALTER TABLE rizeries ADD COLUMN IF NOT EXISTS masse_salariale_baseline NUMERIC(14,2) DEFAULT 0`,
     `ALTER TABLE rizeries ADD COLUMN IF NOT EXISTS ca_baseline NUMERIC(14,2) DEFAULT 0`,
     `ALTER TABLE rizeries ADD COLUMN IF NOT EXISTS baseline_date DATE DEFAULT CURRENT_DATE`,
+    // ── Rôle directeur ───────────────────────────────────────────
+    `DO $$
+     DECLARE c TEXT;
+     BEGIN
+       SELECT conname INTO c FROM pg_constraint
+       WHERE conrelid = 'users'::regclass AND contype = 'c'
+         AND pg_get_constraintdef(oid) LIKE '%role%' LIMIT 1;
+       IF c IS NOT NULL THEN EXECUTE format('ALTER TABLE users DROP CONSTRAINT %I', c); END IF;
+       BEGIN
+         ALTER TABLE users ADD CONSTRAINT users_role_check
+           CHECK (role IN ('rizier','superadmin','vendeur','support','manager','directeur'));
+       EXCEPTION WHEN duplicate_object THEN NULL; END;
+     END $$`,
+    // ── Lien compte plateforme sur les employés ───────────────────
+    `ALTER TABLE emplois ADD COLUMN IF NOT EXISTS user_account_id UUID REFERENCES users(id) ON DELETE SET NULL`,
+    `ALTER TABLE emplois ADD COLUMN IF NOT EXISTS role_plateforme VARCHAR(20)`,
+    `DO $$ BEGIN
+       ALTER TABLE emplois ADD CONSTRAINT emplois_role_plateforme_check
+         CHECK (role_plateforme IN ('vendeur','manager','directeur'));
+     EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
   ];
 
   for (let i = 0; i < migrations.length; i++) {

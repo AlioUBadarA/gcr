@@ -8,7 +8,7 @@ const router = express.Router();
 router.use(auth);
 
 function canManage(req, res, next) {
-  if (!['rizier', 'manager', 'superadmin'].includes(req.userRole))
+  if (!['rizier', 'directeur', 'manager', 'superadmin'].includes(req.userRole))
     return res.status(403).json({ error: 'Accès réservé au responsable de rizerie' });
   next();
 }
@@ -33,7 +33,7 @@ router.get('/', canManage, attachScopeIds, async (req, res) => {
         FROM users u
         LEFT JOIN users m ON m.id = u.parent_id AND m.role = 'manager'
         LEFT JOIN ventes v ON v.user_id = u.id
-        WHERE u.id = ANY($1::uuid[]) AND u.role = 'vendeur'
+        WHERE u.id = ANY($1::uuid[]) AND u.role IN ('vendeur','manager','directeur')
         GROUP BY u.id, m.nom
         ORDER BY u.nom
       `, [req.scopeIds, annee]),
@@ -69,7 +69,8 @@ router.get('/', canManage, attachScopeIds, async (req, res) => {
   }
 });
 
-// POST /api/equipe — créer un commercial (vendeur) ou, si rizier, un manager
+// POST /api/equipe — créer un directeur (rizier seulement), un manager (rizier/directeur)
+//                    ou un vendeur/commercial (rizier/directeur/manager)
 router.post('/', canManage, async (req, res) => {
   try {
     const { nom, email, password, telephone, role, zone, manager_id } = req.body;
@@ -78,15 +79,21 @@ router.post('/', canManage, async (req, res) => {
     if (password.length < 12)
       return res.status(400).json({ error: 'Mot de passe : 12 caractères minimum' });
 
-    const wantsManager = role === 'manager';
-    if (wantsManager && req.userRole !== 'rizier')
-      return res.status(403).json({ error: 'Seul le rizier peut créer un manager' });
+    const wantsDirecteur = role === 'directeur';
+    const wantsManager   = role === 'manager';
+    const targetRole     = wantsDirecteur ? 'directeur' : wantsManager ? 'manager' : 'vendeur';
 
+    if (wantsDirecteur && !['rizier','superadmin'].includes(req.userRole))
+      return res.status(403).json({ error: 'Seul le rizier peut créer un directeur' });
+    if (wantsManager && !['rizier','directeur','superadmin'].includes(req.userRole))
+      return res.status(403).json({ error: 'Seul le rizier ou un directeur peut créer un manager' });
+
+    // Détermination du parent_id
     let parentId = req.userId;
-    if (!wantsManager && req.userRole === 'rizier' && manager_id) {
+    if (!wantsDirecteur && !wantsManager && manager_id) {
       const mgr = await pool.query(
-        `SELECT id FROM users WHERE id=$1 AND parent_id=$2 AND role='manager'`,
-        [manager_id, req.userId]
+        `SELECT id FROM users WHERE id=$1 AND role='manager'`,
+        [manager_id]
       );
       if (!mgr.rows.length) return res.status(400).json({ error: 'Manager invalide' });
       parentId = manager_id;
@@ -101,7 +108,7 @@ router.post('/', canManage, async (req, res) => {
        VALUES ($1,$2,$3,$4,$5,$6,$7)
        RETURNING id, nom, email, telephone, role, zone, parent_id, created_at`,
       [nom.trim(), email.toLowerCase().trim(), hash, telephone || null,
-       wantsManager ? 'manager' : 'vendeur', parentId, wantsManager ? (zone || null) : null]
+       targetRole, parentId, zone || null]
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
@@ -116,7 +123,7 @@ router.put('/:id', canManage, attachScopeIds, async (req, res) => {
     const { nom, email, telephone } = req.body;
     const result = await pool.query(
       `UPDATE users SET nom=$1, email=$2, telephone=$3
-       WHERE id=$4 AND id = ANY($5::uuid[]) AND role='vendeur'
+       WHERE id=$4 AND id = ANY($5::uuid[]) AND role IN ('vendeur','manager','directeur')
        RETURNING id, nom, email, telephone, role`,
       [nom, email?.toLowerCase(), telephone || null, req.params.id, req.scopeIds]
     );
@@ -136,7 +143,7 @@ router.patch('/:id/password', canManage, attachScopeIds, async (req, res) => {
     const hash = await bcrypt.hash(new_password, 12);
     const result = await pool.query(
       `UPDATE users SET password=$1
-       WHERE id=$2 AND id = ANY($3::uuid[]) AND role='vendeur'
+       WHERE id=$2 AND id = ANY($3::uuid[]) AND role IN ('vendeur','manager','directeur')
        RETURNING id, nom, email`,
       [hash, req.params.id, req.scopeIds]
     );
@@ -155,7 +162,7 @@ router.delete('/:id', canManage, attachScopeIds, async (req, res) => {
   try {
     const found = await withTransaction(async (client) => {
       const target = await client.query(
-        `SELECT id, role, parent_id FROM users WHERE id=$1 AND id = ANY($2::uuid[]) AND role IN ('vendeur','manager')`,
+        `SELECT id, role, parent_id FROM users WHERE id=$1 AND id = ANY($2::uuid[]) AND role IN ('vendeur','manager','directeur')`,
         [req.params.id, req.scopeIds]
       );
       if (!target.rows.length) return false;
@@ -163,10 +170,16 @@ router.delete('/:id', canManage, attachScopeIds, async (req, res) => {
 
       if (t.role === 'vendeur') {
         await reassignVendeurData(client, t.id, t.parent_id);
-      } else if (req.userRole !== 'rizier') {
-        throw Object.assign(new Error('Seul le rizier peut supprimer un manager'), { status: 403 });
+      } else if (t.role === 'directeur' && !['rizier','superadmin'].includes(req.userRole)) {
+        throw Object.assign(new Error('Seul le rizier peut supprimer un directeur'), { status: 403 });
+      } else if (t.role === 'manager' && !['rizier','directeur','superadmin'].includes(req.userRole)) {
+        throw Object.assign(new Error('Seul le rizier ou un directeur peut supprimer un manager'), { status: 403 });
       } else {
-        await client.query(`UPDATE users SET parent_id=$1 WHERE parent_id=$2 AND role='vendeur'`, [t.parent_id, t.id]);
+        // Remonte managers et vendeurs directs vers le parent du supprimé
+        await client.query(
+          `UPDATE users SET parent_id=$1 WHERE parent_id=$2 AND role IN ('manager','vendeur','directeur')`,
+          [t.parent_id, t.id]
+        );
       }
       await client.query('DELETE FROM users WHERE id=$1', [t.id]);
       return true;

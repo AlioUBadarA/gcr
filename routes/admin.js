@@ -476,6 +476,46 @@ router.post('/support', requireSuperadmin, async (req, res) => {
   }
 });
 
+// PUT /api/admin/support/:id — modifier nom / email (+ mot de passe optionnel)
+router.put('/support/:id', requireSuperadmin, async (req, res) => {
+  try {
+    const { nom, email, new_password } = req.body;
+    if (!nom?.trim() || !email?.trim())
+      return res.status(400).json({ error: 'Nom et email requis' });
+
+    const conflict = await pool.query(
+      'SELECT id FROM users WHERE LOWER(email)=LOWER($1) AND id!=$2', [email.trim(), req.params.id]
+    );
+    if (conflict.rows.length) return res.status(409).json({ error: 'Cet email est déjà utilisé' });
+
+    let result;
+    if (new_password) {
+      if (new_password.length < 12)
+        return res.status(400).json({ error: 'Mot de passe : 12 caractères minimum' });
+      const hash = await bcrypt.hash(new_password, 12);
+      result = await pool.query(
+        `UPDATE users SET nom=$1, email=$2, password=$3
+         WHERE id=$4 AND role='support'
+         RETURNING id, nom, email, created_at`,
+        [nom.trim(), email.toLowerCase().trim(), hash, req.params.id]
+      );
+    } else {
+      result = await pool.query(
+        `UPDATE users SET nom=$1, email=$2
+         WHERE id=$3 AND role='support'
+         RETURNING id, nom, email, created_at`,
+        [nom.trim(), email.toLowerCase().trim(), req.params.id]
+      );
+    }
+    if (!result.rows.length) return res.status(404).json({ error: 'Compte support non trouvé' });
+    await log(req.userId, req.userNom, 'SUPPORT_UPDATED', result.rows[0], { email }, req.ip);
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('PUT support:', err.message);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
 // DELETE /api/admin/support/:id
 router.delete('/support/:id', requireSuperadmin, async (req, res) => {
   try {
@@ -540,6 +580,46 @@ router.post('/superadmins', requireSuperadmin, async (req, res) => {
   }
 });
 
+// PUT /api/admin/superadmins/:id — modifier nom / email (+ mot de passe optionnel)
+router.put('/superadmins/:id', requireSuperadmin, async (req, res) => {
+  try {
+    const { nom, email, new_password } = req.body;
+    if (!nom?.trim() || !email?.trim())
+      return res.status(400).json({ error: 'Nom et email requis' });
+
+    const conflict = await pool.query(
+      'SELECT id FROM users WHERE LOWER(email)=LOWER($1) AND id!=$2', [email.trim(), req.params.id]
+    );
+    if (conflict.rows.length) return res.status(409).json({ error: 'Cet email est déjà utilisé' });
+
+    let result;
+    if (new_password) {
+      if (new_password.length < 12)
+        return res.status(400).json({ error: 'Mot de passe : 12 caractères minimum' });
+      const hash = await bcrypt.hash(new_password, 12);
+      result = await pool.query(
+        `UPDATE users SET nom=$1, email=$2, password=$3
+         WHERE id=$4 AND role='superadmin'
+         RETURNING id, nom, email, created_at`,
+        [nom.trim(), email.toLowerCase().trim(), hash, req.params.id]
+      );
+    } else {
+      result = await pool.query(
+        `UPDATE users SET nom=$1, email=$2
+         WHERE id=$3 AND role='superadmin'
+         RETURNING id, nom, email, created_at`,
+        [nom.trim(), email.toLowerCase().trim(), req.params.id]
+      );
+    }
+    if (!result.rows.length) return res.status(404).json({ error: 'Compte superadmin non trouvé' });
+    await log(req.userId, req.userNom, 'SUPERADMIN_UPDATED', result.rows[0], { email }, req.ip);
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('PUT superadmins:', err.message);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
 // DELETE /api/admin/superadmins/:id
 router.delete('/superadmins/:id', requireSuperadmin, async (req, res) => {
   try {
@@ -559,6 +639,166 @@ router.delete('/superadmins/:id', requireSuperadmin, async (req, res) => {
     res.json({ message: 'Compte superadmin supprimé' });
   } catch (err) {
     console.error('DELETE superadmins:', err.message);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════
+// COMPTES COMMERCIAUX (directeur / manager / vendeur)
+// Visibles par le superadmin pour superviser tous les accès créés
+// automatiquement depuis la gestion des employés.
+// ══════════════════════════════════════════════════════════════
+
+// GET /api/admin/comptes — liste tous les comptes commerciaux par rizerie
+router.get('/comptes', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT u.id, u.nom, u.email, u.role, u.telephone, u.zone,
+             u.suspended, u.suspended_at, u.suspended_reason, u.created_at,
+             u.rizerie_id, r.nom AS rizerie_nom,
+             p.nom AS parent_nom, p.role AS parent_role,
+             e.id AS emploi_id, e.poste
+      FROM users u
+      LEFT JOIN rizeries r ON r.id = u.rizerie_id
+      LEFT JOIN users p    ON p.id = u.parent_id
+      LEFT JOIN emplois e  ON e.user_account_id = u.id
+      WHERE u.role IN ('directeur','manager','vendeur')
+      ORDER BY r.nom NULLS LAST, u.role, u.nom
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('GET comptes:', err.message);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════
+// EXPORT CSV
+// Paramètres :
+//   type      : ventes | clients | emplois (défaut : ventes)
+//   periode   : semaine | mois | trimestre | semestre | annuel (défaut : mois)
+//   annee     : ex. 2025 (défaut : année courante)
+//   valeur    : numéro de semaine (1-52), mois (1-12), trimestre (1-4), semestre (1-2)
+//               ignoré pour annuel
+//   rizerie_id: UUID (optionnel — toutes les rizeries si absent)
+// ══════════════════════════════════════════════════════════════
+
+function getDateRange(periode, annee, valeur) {
+  const y = parseInt(annee) || new Date().getFullYear();
+  const v = parseInt(valeur) || 1;
+  switch (periode) {
+    case 'semaine': {
+      const jan4 = new Date(y, 0, 4);
+      const w1Mon = new Date(jan4);
+      w1Mon.setDate(jan4.getDate() - ((jan4.getDay() + 6) % 7));
+      const mon = new Date(w1Mon);
+      mon.setDate(w1Mon.getDate() + (v - 1) * 7);
+      const sun = new Date(mon);
+      sun.setDate(mon.getDate() + 6);
+      return { debut: mon.toISOString().slice(0,10), fin: sun.toISOString().slice(0,10) };
+    }
+    case 'mois': {
+      const d = new Date(y, v - 1, 1);
+      const f = new Date(y, v, 0);
+      return { debut: d.toISOString().slice(0,10), fin: f.toISOString().slice(0,10) };
+    }
+    case 'trimestre': {
+      const sm = (v - 1) * 3;
+      return { debut: new Date(y, sm, 1).toISOString().slice(0,10),
+               fin:   new Date(y, sm + 3, 0).toISOString().slice(0,10) };
+    }
+    case 'semestre': {
+      const sm = (v - 1) * 6;
+      return { debut: new Date(y, sm, 1).toISOString().slice(0,10),
+               fin:   new Date(y, sm + 6, 0).toISOString().slice(0,10) };
+    }
+    default:
+      return { debut: `${y}-01-01`, fin: `${y}-12-31` };
+  }
+}
+
+function rowsToCsv(rows, cols) {
+  const esc = v => {
+    const s = v === null || v === undefined ? '' : String(v);
+    return s.includes(';') || s.includes('"') || s.includes('\n')
+      ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const lines = [cols.join(';'), ...rows.map(r => cols.map(c => esc(r[c])).join(';'))];
+  return lines.join('\n') + '\n';
+}
+
+// GET /api/admin/export
+router.get('/export', async (req, res) => {
+  try {
+    const { type = 'ventes', periode = 'mois', annee, valeur, rizerie_id } = req.query;
+    const { debut, fin } = getDateRange(periode, annee, valeur);
+
+    // Tous les paramètres passent par des placeholders — jamais d'interpolation de chaîne.
+    const params = rizerie_id ? [debut, fin, rizerie_id] : [debut, fin];
+    const rFilter = rizerie_id ? `AND u.rizerie_id = $3::uuid` : '';
+
+    let csv = '';
+    let filename = '';
+
+    if (type === 'emplois') {
+      const q = await pool.query(`
+        SELECT e.nom, e.poste, e.type_contrat, e.date_embauche, e.salaire, e.telephone,
+               u.nom AS responsable, r.nom AS rizerie, e.note, e.created_at
+        FROM emplois e
+        JOIN users u ON u.id = e.user_id
+        LEFT JOIN rizeries r ON r.id = u.rizerie_id
+        WHERE e.created_at::date BETWEEN $1 AND $2 ${rFilter}
+        ORDER BY r.nom, e.nom
+      `, params);
+      csv = rowsToCsv(q.rows, ['nom','poste','type_contrat','date_embauche','salaire',
+                                'telephone','responsable','rizerie','note','created_at']);
+      filename = `emplois_${debut}_${fin}.csv`;
+
+    } else if (type === 'clients') {
+      const q = await pool.query(`
+        SELECT c.nom, c.type, c.statut, c.zone, c.region, c.segment,
+               c.telephone, c.potentiel_annuel, c.volume_estime, c.frequence,
+               u.nom AS commercial, r.nom AS rizerie, c.note, c.created_at
+        FROM clients c
+        JOIN users u ON u.id = c.user_id
+        LEFT JOIN rizeries r ON r.id = u.rizerie_id
+        WHERE c.created_at::date BETWEEN $1 AND $2 ${rFilter}
+        ORDER BY r.nom, c.nom
+      `, params);
+      csv = rowsToCsv(q.rows, ['nom','type','statut','zone','region','segment','telephone',
+                                'potentiel_annuel','volume_estime','frequence','commercial',
+                                'rizerie','note','created_at']);
+      filename = `clients_${debut}_${fin}.csv`;
+
+    } else {
+      const q = await pool.query(`
+        SELECT v.numero, v.date_vente, v.client_nom, v.produit,
+               v.quantite, v.prix_unitaire, v.montant, v.cout_unitaire,
+               ROUND(v.quantite * COALESCE(NULLIF(v.cout_unitaire,0),0), 2) AS cout_total,
+               ROUND(v.montant - v.quantite * COALESCE(NULLIF(v.cout_unitaire,0),0), 2) AS marge,
+               v.statut_paiement, v.mode, v.date_echeance,
+               COALESCE((SELECT SUM(vs.montant) FROM versements vs WHERE vs.vente_id = v.id), 0) AS total_verse,
+               u.nom AS commercial, u.role AS role_commercial,
+               p.nom AS manager, r.nom AS rizerie, v.note, v.created_at
+        FROM ventes v
+        JOIN users u ON u.id = v.user_id
+        LEFT JOIN users p ON p.id = u.parent_id AND p.role IN ('manager','directeur','rizier')
+        LEFT JOIN rizeries r ON r.id = u.rizerie_id
+        WHERE v.date_vente BETWEEN $1 AND $2 ${rFilter}
+        ORDER BY r.nom, v.date_vente DESC
+      `, params);
+      csv = rowsToCsv(q.rows, ['numero','date_vente','client_nom','produit','quantite',
+                                'prix_unitaire','montant','cout_unitaire','cout_total','marge',
+                                'statut_paiement','mode','date_echeance','total_verse',
+                                'commercial','role_commercial','manager','rizerie','note','created_at']);
+      filename = `ventes_${debut}_${fin}.csv`;
+    }
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send('﻿' + csv); // BOM UTF-8 pour Excel
+  } catch (err) {
+    console.error('GET export:', err.message);
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });

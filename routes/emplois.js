@@ -1,4 +1,5 @@
 const express = require('express');
+const bcrypt  = require('bcryptjs');
 const { pool } = require('../db/pool');
 const auth = require('../middleware/auth');
 
@@ -6,12 +7,16 @@ const router = express.Router();
 router.use(auth);
 
 const TYPES = ['CDI','CDD','Temps partiel','Stage','Journalier'];
+const ROLES_PLATEFORME = ['vendeur','manager','directeur'];
 
 // GET /api/emplois
 router.get('/', async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT * FROM emplois WHERE user_id = $1 ORDER BY nom`,
+      `SELECT e.*, u.email AS compte_email, u.suspended AS compte_suspendu
+       FROM emplois e
+       LEFT JOIN users u ON u.id = e.user_account_id
+       WHERE e.user_id = $1 ORDER BY e.nom`,
       [req.userId]
     );
     res.json(result.rows);
@@ -22,15 +27,50 @@ router.get('/', async (req, res) => {
 });
 
 // POST /api/emplois
+// Si role_plateforme est fourni (vendeur|manager|directeur), crée automatiquement
+// un compte plateforme lié à la rizerie du créateur.
 router.post('/', async (req, res) => {
   try {
-    const { nom, poste, type_contrat, date_embauche, salaire, telephone, note } = req.body;
+    const { nom, poste, type_contrat, date_embauche, salaire, telephone, note,
+            role_plateforme, email, password } = req.body;
     if (!nom) return res.status(400).json({ error: 'Nom requis' });
+
+    let userAccountId = null;
+
+    if (role_plateforme) {
+      if (!ROLES_PLATEFORME.includes(role_plateforme))
+        return res.status(400).json({ error: 'Rôle plateforme invalide (vendeur, manager, directeur)' });
+      if (!email)
+        return res.status(400).json({ error: 'Email requis pour créer un compte plateforme' });
+      if (!password || password.length < 12)
+        return res.status(400).json({ error: 'Mot de passe : 12 caractères minimum' });
+
+      const exists = await pool.query('SELECT id FROM users WHERE email=$1', [email.toLowerCase()]);
+      if (exists.rows.length) return res.status(409).json({ error: 'Cet email est déjà utilisé' });
+
+      const creatorR = await pool.query(
+        'SELECT rizerie_id, rizerie FROM users WHERE id=$1', [req.userId]
+      );
+      const creator = creatorR.rows[0] || {};
+
+      const hash = await bcrypt.hash(password, 12);
+      const userR = await pool.query(
+        `INSERT INTO users (nom, email, password, role, parent_id, rizerie_id, rizerie)
+         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+        [nom.trim(), email.toLowerCase().trim(), hash, role_plateforme,
+         req.userId, creator.rizerie_id || null, creator.rizerie || null]
+      );
+      userAccountId = userR.rows[0].id;
+    }
+
     const result = await pool.query(
-      `INSERT INTO emplois (user_id, nom, poste, type_contrat, date_embauche, salaire, telephone, note)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+      `INSERT INTO emplois
+         (user_id, nom, poste, type_contrat, date_embauche, salaire, telephone, note,
+          user_account_id, role_plateforme)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
       [req.userId, nom.trim(), poste || null, type_contrat || 'CDI',
-       date_embauche || null, salaire || null, telephone || null, note || null]
+       date_embauche || null, salaire || null, telephone || null, note || null,
+       userAccountId, role_plateforme || null]
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
@@ -58,13 +98,23 @@ router.put('/:id', async (req, res) => {
 });
 
 // DELETE /api/emplois/:id
+// Suspend le compte plateforme lié (s'il existe) avant de supprimer l'enregistrement.
 router.delete('/:id', async (req, res) => {
   try {
     const result = await pool.query(
-      'DELETE FROM emplois WHERE id=$1 AND user_id=$2 RETURNING id',
+      'DELETE FROM emplois WHERE id=$1 AND user_id=$2 RETURNING id, user_account_id',
       [req.params.id, req.userId]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Employé non trouvé' });
+
+    if (result.rows[0].user_account_id) {
+      await pool.query(
+        `UPDATE users SET suspended=TRUE, suspended_at=NOW(), suspended_reason='Employé retiré'
+         WHERE id=$1`,
+        [result.rows[0].user_account_id]
+      );
+    }
+
     res.json({ message: 'Supprimé' });
   } catch (err) {
     res.status(500).json({ error: 'Erreur serveur' });
