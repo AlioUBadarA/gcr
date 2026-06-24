@@ -255,7 +255,7 @@ async function createMembreHandler(req, res) {
     if (!rizierR.rows.length) return res.status(404).json({ error: 'Rizier non trouvé' });
     const rizier = rizierR.rows[0];
 
-    const { nom, email, password, telephone, role, zone } = req.body;
+    const { nom, email, password, telephone, role, zone, manager_id } = req.body;
     if (!nom || !email || !password)
       return res.status(400).json({ error: 'Nom, email et mot de passe requis' });
     if (password.length < 12)
@@ -266,6 +266,22 @@ async function createMembreHandler(req, res) {
     if (targetRole === 'directeur' && req.userRole !== 'superadmin')
       return res.status(403).json({ error: 'Seul le superadmin peut créer un directeur' });
 
+    // Déterminer le parent : un vendeur peut être rattaché à un manager de ce rizier,
+    // un manager ou directeur est toujours rattaché directement au rizier.
+    let parentId = rizier.id;
+    if (targetRole === 'vendeur' && manager_id) {
+      const mgrR = await pool.query(
+        `SELECT id FROM users WHERE id=$1 AND role='manager'
+         AND (parent_id=$2 OR parent_id IN (
+           SELECT id FROM users WHERE parent_id=$2 AND role='directeur'
+         ))`,
+        [manager_id, rizier.id]
+      );
+      if (!mgrR.rows.length)
+        return res.status(400).json({ error: 'Manager invalide ou non rattaché à ce rizier' });
+      parentId = manager_id;
+    }
+
     const exists = await pool.query('SELECT id FROM users WHERE email=$1', [email.toLowerCase()]);
     if (exists.rows.length) return res.status(409).json({ error: 'Cet email est déjà utilisé' });
 
@@ -275,7 +291,7 @@ async function createMembreHandler(req, res) {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
        RETURNING id, nom, email, telephone, role, zone, parent_id, rizerie_id, created_at`,
       [nom.trim(), email.toLowerCase().trim(), hash, telephone || null,
-       targetRole, rizier.id, zone || null,
+       targetRole, parentId, zone || null,
        rizier.rizerie_id || null, rizier.rizerie_nom || null]
     );
     const actionMap = { directeur: 'DIRECTEUR_CREATED', manager: 'MANAGER_CREATED', vendeur: 'VENDEUR_CREATED' };
