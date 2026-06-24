@@ -6,32 +6,63 @@ const { attachScopeIds } = require('../middleware/scope');
 const router = express.Router();
 router.use(auth, attachScopeIds);
 
-const TYPES_VALIDES = ['Grossiste','Detaillant marche','Boutique','Restauration','Cantine/Institution'];
+const TYPES_VALIDES  = ['Grossiste','Detaillant marche','Boutique','Restauration','Cantine/Institution'];
 const STATUTS_VALIDES = ['Actif','Prospect','Dormant'];
 
-// Cherche un client existant (même rizier, nom identique) pour le rattacher à une
-// nouvelle vente/contrat, ou le crée automatiquement sinon — pour que chaque
-// transaction garde le portefeuille clients à jour sans saisie manuelle.
+async function getUserRizerieId(userId) {
+  const r = await pool.query('SELECT rizerie_id FROM users WHERE id=$1', [userId]);
+  return r.rows[0]?.rizerie_id || null;
+}
+
+// directeur/rizier/manager voient tout dans la rizerie, vendeur voit ses propres clients
+function readClause(role, rizerieId, scopeIds) {
+  if (['directeur', 'rizier', 'superadmin', 'support', 'manager'].includes(role)) {
+    return { clause: 'c.rizerie_id = $1', params: [rizerieId] };
+  }
+  return { clause: 'c.user_id = ANY($1::uuid[])', params: [scopeIds] };
+}
+
+// Cherche par téléphone dans la rizerie puis par nom sous l'utilisateur, crée si absent.
+// Utilisé par ventes.js lors de la création automatique de clients depuis une vente.
 async function findOrCreateClient(userId, clientNom, telephone) {
   const nom = clientNom.trim();
-  const existing = await pool.query(
+  const rizerieId = await getUserRizerieId(userId);
+
+  if (telephone && rizerieId) {
+    const byPhone = await pool.query(
+      'SELECT * FROM clients WHERE rizerie_id=$1 AND telephone=$2 LIMIT 1',
+      [rizerieId, telephone]
+    );
+    if (byPhone.rows.length) {
+      const updated = await pool.query(
+        `UPDATE clients SET statut = CASE WHEN statut='Prospect' THEN 'Actif' ELSE statut END
+         WHERE id=$1 RETURNING *`,
+        [byPhone.rows[0].id]
+      );
+      return updated.rows[0];
+    }
+  }
+
+  const byName = await pool.query(
     'SELECT * FROM clients WHERE user_id=$1 AND LOWER(nom)=LOWER($2) LIMIT 1',
     [userId, nom]
   );
-  if (existing.rows.length) {
-    const c = existing.rows[0];
-    const result = await pool.query(
+  if (byName.rows.length) {
+    const c = byName.rows[0];
+    const updated = await pool.query(
       `UPDATE clients SET
-         statut = CASE WHEN statut = 'Prospect' THEN 'Actif' ELSE statut END,
+         statut = CASE WHEN statut='Prospect' THEN 'Actif' ELSE statut END,
          telephone = COALESCE(telephone, $1)
-       WHERE id = $2 RETURNING *`,
+       WHERE id=$2 RETURNING *`,
       [telephone || null, c.id]
     );
-    return result.rows[0];
+    return updated.rows[0];
   }
+
   const created = await pool.query(
-    `INSERT INTO clients (user_id, nom, type, statut, telephone) VALUES ($1,$2,'Boutique','Actif',$3) RETURNING *`,
-    [userId, nom, telephone || null]
+    `INSERT INTO clients (user_id, rizerie_id, nom, type, statut, telephone)
+     VALUES ($1,$2,$3,'Boutique','Actif',$4) RETURNING *`,
+    [userId, rizerieId, nom, telephone || null]
   );
   return created.rows[0];
 }
@@ -40,12 +71,14 @@ async function findOrCreateClient(userId, clientNom, telephone) {
 router.get('/', async (req, res) => {
   try {
     const { statut, type, search } = req.query;
-    const ids = req.scopeIds;
+    const rizerieId = await getUserRizerieId(req.userId);
+    if (!rizerieId && !['superadmin','support'].includes(req.userRole)) return res.json([]);
+
+    const { clause, params } = readClause(req.userRole, rizerieId, req.scopeIds);
     let q = `SELECT c.*, u.nom AS vendeur_nom
              FROM clients c
              LEFT JOIN users u ON u.id = c.user_id
-             WHERE c.user_id = ANY($1::uuid[])`;
-    const params = [ids];
+             WHERE ${clause}`;
     if (statut && STATUTS_VALIDES.includes(statut)) {
       q += ` AND c.statut = $${params.length + 1}`; params.push(statut);
     }
@@ -58,25 +91,58 @@ router.get('/', async (req, res) => {
     }
     q += ' ORDER BY c.statut, c.nom';
     const result = await pool.query(q, params);
-    res.json(result.rows);
+
+    const canEditAll = ['directeur', 'rizier', 'superadmin', 'manager'].includes(req.userRole);
+    const rows = result.rows.map(r => ({
+      ...r,
+      can_edit: canEditAll || r.user_id === req.userId,
+      can_delete: ['directeur', 'rizier', 'superadmin'].includes(req.userRole),
+    }));
+    res.json(rows);
   } catch (err) {
     console.error('GET clients:', err.message);
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
 
-// POST /api/clients
+// POST /api/clients — vérifier doublon par téléphone dans toute la rizerie
 router.post('/', async (req, res) => {
   try {
-    const { nom, type, statut, zone, region, segment, potentiel_annuel, telephone, volume_estime, frequence, valorise, horaire, note, produits_interet } = req.body;
+    const { nom, type, statut, zone, region, segment, potentiel_annuel, telephone,
+            volume_estime, frequence, valorise, horaire, note, produits_interet } = req.body;
     if (!nom || !type) return res.status(400).json({ error: 'Nom et type requis' });
     if (!TYPES_VALIDES.includes(type)) return res.status(400).json({ error: 'Type invalide' });
 
+    const rizerieId = await getUserRizerieId(req.userId);
+
+    if (telephone && rizerieId) {
+      const dup = await pool.query(
+        `SELECT c.id, c.nom, c.telephone, u.nom AS assigne_a
+         FROM clients c LEFT JOIN users u ON u.id = c.user_id
+         WHERE c.rizerie_id=$1 AND c.telephone=$2 LIMIT 1`,
+        [rizerieId, telephone]
+      );
+      if (dup.rows.length) {
+        return res.status(409).json({
+          error: 'client_existe',
+          message: 'Un client avec ce numéro existe déjà dans votre rizerie',
+          client: {
+            id: dup.rows[0].id,
+            nom: dup.rows[0].nom,
+            telephone: dup.rows[0].telephone,
+            assigne_a: dup.rows[0].assigne_a,
+          },
+        });
+      }
+    }
+
     const result = await pool.query(
-      `INSERT INTO clients (user_id, nom, type, statut, zone, region, segment, potentiel_annuel, telephone, volume_estime, frequence, valorise, horaire, note, produits_interet)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
-      [req.userId, nom.trim(), type, statut || 'Prospect', zone || null, region || null, segment || null,
-       potentiel_annuel || 0, telephone || null, volume_estime || 0, frequence || null, valorise || null, horaire || null, note || null,
+      `INSERT INTO clients (user_id, rizerie_id, nom, type, statut, zone, region, segment,
+         potentiel_annuel, telephone, volume_estime, frequence, valorise, horaire, note, produits_interet)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
+      [req.userId, rizerieId || null, nom.trim(), type, statut || 'Prospect',
+       zone || null, region || null, segment || null, potentiel_annuel || 0, telephone || null,
+       volume_estime || 0, frequence || null, valorise || null, horaire || null, note || null,
        Array.isArray(produits_interet) ? produits_interet : []]
     );
     res.status(201).json(result.rows[0]);
@@ -86,73 +152,111 @@ router.post('/', async (req, res) => {
   }
 });
 
-// GET /api/clients/:id
+// GET /api/clients/:id — lecture autorisée pour toute la rizerie (avec can_edit/can_delete)
 router.get('/:id', async (req, res) => {
   try {
-    const ids = req.scopeIds;
-    const result = await pool.query(
-      'SELECT * FROM clients WHERE id = $1 AND user_id = ANY($2::uuid[])',
-      [req.params.id, ids]
-    );
-    if (!result.rows.length) return res.status(404).json({ error: 'Client non trouve' });
-    res.json(result.rows[0]);
+    const rizerieId = await getUserRizerieId(req.userId);
+    let result;
+    if (rizerieId) {
+      result = await pool.query(
+        `SELECT c.*, u.nom AS vendeur_nom FROM clients c
+         LEFT JOIN users u ON u.id = c.user_id
+         WHERE c.id=$1 AND c.rizerie_id=$2`,
+        [req.params.id, rizerieId]
+      );
+    } else {
+      result = await pool.query(
+        `SELECT c.*, u.nom AS vendeur_nom FROM clients c LEFT JOIN users u ON u.id = c.user_id
+         WHERE c.id=$1 AND c.user_id = ANY($2::uuid[])`,
+        [req.params.id, req.scopeIds]
+      );
+    }
+    if (!result.rows.length) return res.status(404).json({ error: 'Client non trouvé' });
+    const c = result.rows[0];
+    const canEditAll = ['directeur', 'rizier', 'superadmin', 'manager'].includes(req.userRole);
+    res.json({
+      ...c,
+      can_edit: canEditAll || c.user_id === req.userId,
+      can_delete: ['directeur', 'rizier', 'superadmin'].includes(req.userRole),
+    });
   } catch (err) {
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
 
 // PUT /api/clients/:id
+// Directeur/rizier/manager : tout client de la rizerie — Vendeur : ses propres clients
 router.put('/:id', async (req, res) => {
   try {
-    const { nom, type, statut, zone, region, segment, potentiel_annuel, telephone, volume_estime, frequence, valorise, horaire, note, produits_interet } = req.body;
+    const { nom, type, statut, zone, region, segment, potentiel_annuel, telephone,
+            volume_estime, frequence, valorise, horaire, note, produits_interet } = req.body;
     if (type && !TYPES_VALIDES.includes(type)) return res.status(400).json({ error: 'Type invalide' });
     if (statut && !STATUTS_VALIDES.includes(statut)) return res.status(400).json({ error: 'Statut invalide' });
 
-    const ids = req.scopeIds;
+    const rizerieId = await getUserRizerieId(req.userId);
+    const canEditAll = ['directeur', 'rizier', 'superadmin', 'manager'].includes(req.userRole);
+
+    const access = canEditAll && rizerieId
+      ? await pool.query('SELECT id FROM clients WHERE id=$1 AND rizerie_id=$2', [req.params.id, rizerieId])
+      : await pool.query('SELECT id FROM clients WHERE id=$1 AND user_id=$2', [req.params.id, req.userId]);
+    if (!access.rows.length) return res.status(403).json({ error: 'Modification non autorisée pour ce client' });
+
     const result = await pool.query(
       `UPDATE clients SET
          nom=$1, type=$2, statut=$3, zone=$4, region=$5, segment=$6, potentiel_annuel=$7, telephone=$8,
-         volume_estime=$9, frequence=$10, valorise=$11, horaire=$12, note=$13, produits_interet=$14
-       WHERE id=$15 AND user_id = ANY($16::uuid[]) RETURNING *`,
-      [nom, type, statut, zone || null, region || null, segment || null, potentiel_annuel || 0, telephone || null,
-       volume_estime || 0, frequence || null, valorise || null, horaire || null, note || null,
-       Array.isArray(produits_interet) ? produits_interet : [],
-       req.params.id, ids]
+         volume_estime=$9, frequence=$10, valorise=$11, horaire=$12, note=$13, produits_interet=$14,
+         updated_at=NOW()
+       WHERE id=$15 RETURNING *`,
+      [nom, type, statut, zone || null, region || null, segment || null, potentiel_annuel || 0,
+       telephone || null, volume_estime || 0, frequence || null, valorise || null, horaire || null,
+       note || null, Array.isArray(produits_interet) ? produits_interet : [], req.params.id]
     );
-    if (!result.rows.length) return res.status(404).json({ error: 'Client non trouve' });
     res.json(result.rows[0]);
   } catch (err) {
+    console.error('PUT clients:', err.message);
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
 
-// PATCH /api/clients/:id/statut
+// PATCH /api/clients/:id/statut — mêmes droits que PUT
 router.patch('/:id/statut', async (req, res) => {
   try {
     const { statut } = req.body;
     if (!STATUTS_VALIDES.includes(statut)) return res.status(400).json({ error: 'Statut invalide' });
-    const ids = req.scopeIds;
+
+    const rizerieId = await getUserRizerieId(req.userId);
+    const canEditAll = ['directeur', 'rizier', 'superadmin', 'manager'].includes(req.userRole);
+
+    const access = canEditAll && rizerieId
+      ? await pool.query('SELECT id FROM clients WHERE id=$1 AND rizerie_id=$2', [req.params.id, rizerieId])
+      : await pool.query('SELECT id FROM clients WHERE id=$1 AND user_id=$2', [req.params.id, req.userId]);
+    if (!access.rows.length) return res.status(403).json({ error: 'Modification non autorisée pour ce client' });
+
     const result = await pool.query(
-      'UPDATE clients SET statut=$1 WHERE id=$2 AND user_id = ANY($3::uuid[]) RETURNING *',
-      [statut, req.params.id, ids]
+      'UPDATE clients SET statut=$1, updated_at=NOW() WHERE id=$2 RETURNING *',
+      [statut, req.params.id]
     );
-    if (!result.rows.length) return res.status(404).json({ error: 'Client non trouve' });
     res.json(result.rows[0]);
   } catch (err) {
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
 
-// DELETE /api/clients/:id
+// DELETE /api/clients/:id — directeur et rizier uniquement
 router.delete('/:id', async (req, res) => {
   try {
-    const ids = req.scopeIds;
+    if (!['directeur', 'rizier', 'superadmin'].includes(req.userRole))
+      return res.status(403).json({ error: 'Seul le directeur peut supprimer un client' });
+
+    const rizerieId = await getUserRizerieId(req.userId);
+    if (!rizerieId) return res.status(400).json({ error: 'Compte non rattaché à une rizerie' });
+
     const result = await pool.query(
-      'DELETE FROM clients WHERE id=$1 AND user_id = ANY($2::uuid[]) RETURNING id',
-      [req.params.id, ids]
+      'DELETE FROM clients WHERE id=$1 AND rizerie_id=$2 RETURNING id',
+      [req.params.id, rizerieId]
     );
-    if (!result.rows.length) return res.status(404).json({ error: 'Client non trouve' });
-    res.json({ message: 'Client supprime' });
+    if (!result.rows.length) return res.status(404).json({ error: 'Client non trouvé' });
+    res.json({ message: 'Client supprimé' });
   } catch (err) {
     res.status(500).json({ error: 'Erreur serveur' });
   }

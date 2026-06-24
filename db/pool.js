@@ -283,6 +283,11 @@ async function runMigrations() {
        ALTER TABLE emplois ADD CONSTRAINT emplois_role_plateforme_check
          CHECK (role_plateforme IN ('vendeur','manager','directeur'));
      EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
+    // ── Produits et Clients liés à la rizerie ─────────────────────
+    `ALTER TABLE produits ADD COLUMN IF NOT EXISTS rizerie_id UUID REFERENCES rizeries(id) ON DELETE SET NULL`,
+    `UPDATE produits p SET rizerie_id = u.rizerie_id FROM users u WHERE u.id = p.user_id AND p.rizerie_id IS NULL AND u.rizerie_id IS NOT NULL`,
+    `ALTER TABLE clients ADD COLUMN IF NOT EXISTS rizerie_id UUID REFERENCES rizeries(id) ON DELETE SET NULL`,
+    `UPDATE clients c SET rizerie_id = u.rizerie_id FROM users u WHERE u.id = c.user_id AND c.rizerie_id IS NULL AND u.rizerie_id IS NOT NULL`,
   ];
 
   for (let i = 0; i < migrations.length; i++) {
