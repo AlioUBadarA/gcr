@@ -18,9 +18,12 @@ router.get('/search', async (req, res) => {
 
     const ventesR = await pool.query(
       `SELECT v.id, v.numero, v.client_nom, v.date_vente AS date, v.montant AS montant_total,
-              v.statut_paiement AS statut, COALESCE(ve.total_verse, 0) AS total_verse
+              v.produit, v.quantite, v.prix_unitaire, v.date_echeance, v.mode, v.note,
+              v.statut_paiement AS statut, COALESCE(ve.total_verse, 0) AS total_verse,
+              u.nom AS vendeur_nom
        FROM ventes v
        LEFT JOIN (SELECT vente_id, SUM(montant) AS total_verse FROM versements GROUP BY vente_id) ve ON ve.vente_id = v.id
+       LEFT JOIN users u ON u.id = v.user_id
        WHERE v.user_id = ANY($1::uuid[]) AND (v.numero ILIKE $2 OR v.client_nom ILIKE $2)
        ORDER BY v.created_at DESC LIMIT 30`,
       [ids, like]
