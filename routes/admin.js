@@ -898,6 +898,7 @@ router.get('/performance', async (req, res) => {
           COALESCE((
             SELECT COUNT(*) FROM emplois e
             JOIN users u ON u.id = e.user_id WHERE u.rizerie_id = r.id
+            AND (e.periode_rizao = 'Avec RIZAO' OR e.periode_rizao IS NULL)
           ), 0) AS emplois_app
         FROM rizeries r
         ORDER BY r.nom
@@ -912,7 +913,7 @@ router.get('/performance', async (req, res) => {
       pool.query(`
         SELECT COUNT(*) FILTER (WHERE statut = 'Actif') AS actifs FROM contrats_clients
       `),
-      pool.query(`SELECT COUNT(*) AS nb FROM emplois`),
+      pool.query(`SELECT COUNT(*) AS nb FROM emplois WHERE periode_rizao = 'Avec RIZAO' OR periode_rizao IS NULL`),
     ]);
 
     const g = globalR.rows[0];

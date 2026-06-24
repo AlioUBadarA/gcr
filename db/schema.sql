@@ -388,3 +388,7 @@ ALTER TABLE rizeries ADD COLUMN IF NOT EXISTS emplois_baseline INT DEFAULT 0;
 ALTER TABLE rizeries ADD COLUMN IF NOT EXISTS masse_salariale_baseline NUMERIC(14,2) DEFAULT 0;
 ALTER TABLE rizeries ADD COLUMN IF NOT EXISTS ca_baseline NUMERIC(14,2) DEFAULT 0;
 ALTER TABLE rizeries ADD COLUMN IF NOT EXISTS baseline_date DATE DEFAULT CURRENT_DATE;
+
+-- Periode RIZAO sur les emplois : 'Avant RIZAO' ou 'Avec RIZAO' (défaut)
+ALTER TABLE emplois ADD COLUMN IF NOT EXISTS periode_rizao VARCHAR(20) DEFAULT 'Avec RIZAO'
+  CHECK (periode_rizao IN ('Avant RIZAO', 'Avec RIZAO'));

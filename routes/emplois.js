@@ -32,7 +32,7 @@ router.get('/', async (req, res) => {
 router.post('/', async (req, res) => {
   try {
     const { nom, poste, type_contrat, date_embauche, salaire, telephone, note,
-            role_plateforme, email, password } = req.body;
+            role_plateforme, email, password, periode_rizao } = req.body;
     if (!nom) return res.status(400).json({ error: 'Nom requis' });
 
     let userAccountId = null;
@@ -63,14 +63,15 @@ router.post('/', async (req, res) => {
       userAccountId = userR.rows[0].id;
     }
 
+    const periodeVal = ['Avant RIZAO', 'Avec RIZAO'].includes(periode_rizao) ? periode_rizao : 'Avec RIZAO';
     const result = await pool.query(
       `INSERT INTO emplois
          (user_id, nom, poste, type_contrat, date_embauche, salaire, telephone, note,
-          user_account_id, role_plateforme)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+          user_account_id, role_plateforme, periode_rizao)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
       [req.userId, nom.trim(), poste || null, type_contrat || 'CDI',
        date_embauche || null, salaire || null, telephone || null, note || null,
-       userAccountId, role_plateforme || null]
+       userAccountId, role_plateforme || null, periodeVal]
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
@@ -82,13 +83,15 @@ router.post('/', async (req, res) => {
 // PUT /api/emplois/:id
 router.put('/:id', async (req, res) => {
   try {
-    const { nom, poste, type_contrat, date_embauche, salaire, telephone, note } = req.body;
+    const { nom, poste, type_contrat, date_embauche, salaire, telephone, note, periode_rizao } = req.body;
+    const periodeVal = ['Avant RIZAO', 'Avec RIZAO'].includes(periode_rizao) ? periode_rizao : 'Avec RIZAO';
     const result = await pool.query(
       `UPDATE emplois SET nom=$1, poste=$2, type_contrat=$3, date_embauche=$4,
-         salaire=$5, telephone=$6, note=$7
-       WHERE id=$8 AND user_id=$9 RETURNING *`,
+         salaire=$5, telephone=$6, note=$7, periode_rizao=$8
+       WHERE id=$9 AND user_id=$10 RETURNING *`,
       [nom, poste || null, type_contrat || 'CDI', date_embauche || null,
-       salaire || null, telephone || null, note || null, req.params.id, req.userId]
+       salaire || null, telephone || null, note || null, periodeVal,
+       req.params.id, req.userId]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Employé non trouvé' });
     res.json(result.rows[0]);
