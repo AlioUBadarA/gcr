@@ -65,11 +65,23 @@ router.get('/rizeries', async (req, res) => {
              r.emplois_baseline, r.masse_salariale_baseline, r.ca_baseline, r.baseline_date,
              COUNT(DISTINCT u.id)                    AS nb_comptes,
              COALESCE(SUM(va.ca_total), 0)           AS ca_total,
+             COALESCE(SUM(va_cur.ca_annee), 0)       AS ca_annee_courante,
+             COALESCE(SUM(va_prev.ca_annee), 0)      AS ca_annee_precedente,
              COALESCE(SUM(ea.nb_emplois), 0)         AS emplois_actuels,
              COALESCE(SUM(ea.masse_salariale), 0)    AS masse_salariale_actuelle
       FROM rizeries r
       LEFT JOIN users u ON u.rizerie_id = r.id AND u.role IN ('rizier','vendeur')
       LEFT JOIN (SELECT user_id, SUM(montant) AS ca_total FROM ventes GROUP BY user_id) va ON va.user_id = u.id
+      LEFT JOIN (
+        SELECT user_id, SUM(montant) AS ca_annee FROM ventes
+        WHERE EXTRACT(YEAR FROM date_vente) = EXTRACT(YEAR FROM NOW())
+        GROUP BY user_id
+      ) va_cur ON va_cur.user_id = u.id
+      LEFT JOIN (
+        SELECT user_id, SUM(montant) AS ca_annee FROM ventes
+        WHERE EXTRACT(YEAR FROM date_vente) = EXTRACT(YEAR FROM NOW()) - 1
+        GROUP BY user_id
+      ) va_prev ON va_prev.user_id = u.id
       LEFT JOIN (SELECT user_id, COUNT(*) AS nb_emplois, SUM(salaire) AS masse_salariale FROM emplois GROUP BY user_id) ea ON ea.user_id = u.id
       GROUP BY r.id
       ORDER BY r.nom
