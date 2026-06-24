@@ -288,6 +288,9 @@ async function runMigrations() {
     `UPDATE produits p SET rizerie_id = u.rizerie_id FROM users u WHERE u.id = p.user_id AND p.rizerie_id IS NULL AND u.rizerie_id IS NOT NULL`,
     `ALTER TABLE clients ADD COLUMN IF NOT EXISTS rizerie_id UUID REFERENCES rizeries(id) ON DELETE SET NULL`,
     `UPDATE clients c SET rizerie_id = u.rizerie_id FROM users u WHERE u.id = c.user_id AND c.rizerie_id IS NULL AND u.rizerie_id IS NOT NULL`,
+    // ── Plusieurs produits par contrat client ─────────────────────
+    `ALTER TABLE contrats_clients ADD COLUMN IF NOT EXISTS produits TEXT[] DEFAULT '{}'`,
+    `UPDATE contrats_clients SET produits = ARRAY[produit] WHERE (produits IS NULL OR produits = '{}') AND produit IS NOT NULL AND produit != ''`,
   ];
 
   for (let i = 0; i < migrations.length; i++) {

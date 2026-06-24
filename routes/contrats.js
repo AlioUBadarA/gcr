@@ -38,8 +38,9 @@ router.get('/clients', async (req, res) => {
 // POST /api/contrats/clients
 router.post('/clients', async (req, res) => {
   try {
-    const { client_id, client_nom, produit, quantite_mensuelle, prix_unitaire, date_debut, date_fin, statut, note } = req.body;
-    if (!client_nom || !produit) return res.status(400).json({ error: 'Client et produit requis' });
+    const { client_id, client_nom, produits, quantite_mensuelle, prix_unitaire, date_debut, date_fin, statut, note } = req.body;
+    const produitsArr = Array.isArray(produits) && produits.length > 0 ? produits : [];
+    if (!client_nom || !produitsArr.length) return res.status(400).json({ error: 'Client et au moins un produit requis' });
 
     let resolvedClientId = client_id || null;
     if (!resolvedClientId) {
@@ -49,10 +50,10 @@ router.post('/clients', async (req, res) => {
 
     const numero = await nextNumero('contrats_clients', 'CC', req.userId);
     const result = await pool.query(
-      `INSERT INTO contrats_clients (user_id, client_id, client_nom, produit, quantite_mensuelle, prix_unitaire, date_debut, date_fin, statut, note, numero)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
-      [req.userId, resolvedClientId, client_nom.trim(), produit.trim(),
-       quantite_mensuelle || 0, prix_unitaire || 0,
+      `INSERT INTO contrats_clients (user_id, client_id, client_nom, produit, produits, quantite_mensuelle, prix_unitaire, date_debut, date_fin, statut, note, numero)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+      [req.userId, resolvedClientId, client_nom.trim(), produitsArr[0],
+       produitsArr, quantite_mensuelle || 0, prix_unitaire || 0,
        date_debut || null, date_fin || null, statut || 'Actif', note || null, numero]
     );
     res.status(201).json(result.rows[0]);
@@ -65,13 +66,15 @@ router.post('/clients', async (req, res) => {
 // PUT /api/contrats/clients/:id
 router.put('/clients/:id', async (req, res) => {
   try {
-    const { client_nom, produit, quantite_mensuelle, prix_unitaire, date_debut, date_fin, statut, note } = req.body;
+    const { client_nom, produits, quantite_mensuelle, prix_unitaire, date_debut, date_fin, statut, note } = req.body;
+    const produitsArr = Array.isArray(produits) && produits.length > 0 ? produits : [];
+    if (!produitsArr.length) return res.status(400).json({ error: 'Au moins un produit requis' });
     const ids = await getScopeIds(req.userId, req.userRole);
     const result = await pool.query(
-      `UPDATE contrats_clients SET client_nom=$1, produit=$2, quantite_mensuelle=$3,
-         prix_unitaire=$4, date_debut=$5, date_fin=$6, statut=$7, note=$8
-       WHERE id=$9 AND user_id = ANY($10::uuid[]) RETURNING *`,
-      [client_nom, produit, quantite_mensuelle || 0, prix_unitaire || 0,
+      `UPDATE contrats_clients SET client_nom=$1, produit=$2, produits=$3, quantite_mensuelle=$4,
+         prix_unitaire=$5, date_debut=$6, date_fin=$7, statut=$8, note=$9
+       WHERE id=$10 AND user_id = ANY($11::uuid[]) RETURNING *`,
+      [client_nom, produitsArr[0], produitsArr, quantite_mensuelle || 0, prix_unitaire || 0,
        date_debut || null, date_fin || null, statut || 'Actif', note || null,
        req.params.id, ids]
     );
