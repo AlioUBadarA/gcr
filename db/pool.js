@@ -291,6 +291,33 @@ async function runMigrations() {
     // ── Plusieurs produits par contrat client ─────────────────────
     `ALTER TABLE contrats_clients ADD COLUMN IF NOT EXISTS produits TEXT[] DEFAULT '{}'`,
     `UPDATE contrats_clients SET produits = ARRAY[produit] WHERE (produits IS NULL OR produits = '{}') AND produit IS NOT NULL AND produit != ''`,
+    // ── Compteurs de numéros de transaction par rizerie (atomique, sans race condition) ──
+    `CREATE TABLE IF NOT EXISTS transaction_counters (
+       rizerie_id UUID NOT NULL REFERENCES rizeries(id) ON DELETE CASCADE,
+       table_name VARCHAR(50) NOT NULL,
+       year       INT NOT NULL,
+       last_val   INT NOT NULL DEFAULT 0,
+       PRIMARY KEY (rizerie_id, table_name, year)
+     )`,
+    // Initialise les compteurs depuis les données existantes (idempotent grâce à ON CONFLICT DO NOTHING)
+    `INSERT INTO transaction_counters (rizerie_id, table_name, year, last_val)
+     SELECT u.rizerie_id, 'ventes', EXTRACT(YEAR FROM v.created_at)::INT, COUNT(*)::INT
+     FROM ventes v JOIN users u ON u.id = v.user_id
+     WHERE u.rizerie_id IS NOT NULL
+     GROUP BY u.rizerie_id, EXTRACT(YEAR FROM v.created_at)::INT
+     ON CONFLICT DO NOTHING`,
+    `INSERT INTO transaction_counters (rizerie_id, table_name, year, last_val)
+     SELECT u.rizerie_id, 'contrats_clients', EXTRACT(YEAR FROM c.created_at)::INT, COUNT(*)::INT
+     FROM contrats_clients c JOIN users u ON u.id = c.user_id
+     WHERE u.rizerie_id IS NOT NULL
+     GROUP BY u.rizerie_id, EXTRACT(YEAR FROM c.created_at)::INT
+     ON CONFLICT DO NOTHING`,
+    `INSERT INTO transaction_counters (rizerie_id, table_name, year, last_val)
+     SELECT u.rizerie_id, 'contrats_paddy', EXTRACT(YEAR FROM c.created_at)::INT, COUNT(*)::INT
+     FROM contrats_paddy c JOIN users u ON u.id = c.user_id
+     WHERE u.rizerie_id IS NOT NULL
+     GROUP BY u.rizerie_id, EXTRACT(YEAR FROM c.created_at)::INT
+     ON CONFLICT DO NOTHING`,
   ];
 
   for (let i = 0; i < migrations.length; i++) {
@@ -359,15 +386,33 @@ async function reassignVendeurData(client, vendeurId, parentId) {
   await client.query('UPDATE clients SET user_id=$1 WHERE user_id=$2', [parentId, vendeurId]);
 }
 
-// Génère un numéro de transaction lisible (ex: V-2026-0007) pour identifier
-// une vente/un contrat et pouvoir le retrouver dans Encaissements.
+// Génère un numéro de transaction unique par rizerie (ex: V-2026-0007).
+// Utilise un compteur atomique (INSERT … ON CONFLICT DO UPDATE) pour éviter
+// toute race condition entre deux transactions simultanées.
 async function nextNumero(table, prefix, userId) {
   const year = new Date().getFullYear();
+
+  const userR = await pool.query('SELECT rizerie_id FROM users WHERE id=$1', [userId]);
+  const rizerieId = userR.rows[0]?.rizerie_id;
+
+  if (!rizerieId) {
+    // Fallback si l'utilisateur n'est pas rattaché à une rizerie (ne doit pas arriver en prod)
+    const { rows } = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM ${table} WHERE user_id=$1 AND EXTRACT(YEAR FROM created_at)=$2`,
+      [userId, year]
+    );
+    return `${prefix}-${year}-${String(rows[0].n + 1).padStart(4, '0')}`;
+  }
+
   const { rows } = await pool.query(
-    `SELECT COUNT(*)::int AS n FROM ${table} WHERE user_id=$1 AND EXTRACT(YEAR FROM created_at)=$2`,
-    [userId, year]
+    `INSERT INTO transaction_counters (rizerie_id, table_name, year, last_val)
+     VALUES ($1, $2, $3, 1)
+     ON CONFLICT (rizerie_id, table_name, year)
+     DO UPDATE SET last_val = transaction_counters.last_val + 1
+     RETURNING last_val`,
+    [rizerieId, table, year]
   );
-  return `${prefix}-${year}-${String(rows[0].n + 1).padStart(4, '0')}`;
+  return `${prefix}-${year}-${String(rows[0].last_val).padStart(4, '0')}`;
 }
 
 module.exports = { pool, initSchema, runMigrations, withTransaction, reassignVendeurData, nextNumero };
