@@ -174,8 +174,8 @@ router.patch('/:id/role', attachScopeIds, async (req, res) => {
 // PATCH /api/equipe/:id/manager — réaffecter un commercial à un autre manager
 // Seul le directeur (ou superadmin) peut faire ça.
 router.patch('/:id/manager', attachScopeIds, async (req, res) => {
-  if (!['directeur', 'superadmin'].includes(req.userRole))
-    return res.status(403).json({ error: 'Seul le directeur peut réaffecter un commercial' });
+  if (!['directeur', 'rizier', 'superadmin'].includes(req.userRole))
+    return res.status(403).json({ error: 'Seul le directeur ou le rizier peut réaffecter un commercial' });
 
   try {
     const { manager_id } = req.body;
