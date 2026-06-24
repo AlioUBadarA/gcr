@@ -16,8 +16,10 @@ router.get('/', async (req, res) => {
     const ids = await getScopeIds(req.userId, req.userRole);
 
     const [
-      kpis, mensuel, topClients, creances, alertes,
-      objAnnuelR, segmentR, regionR, produitR, vendeursR, ventesVendeurR, forecastVendeurR,
+      kpis, mensuel, topClients, creances, clientsStatutR,
+      objAnnuelR, segmentR, regionR, produitR,
+      versementsR,
+      vendeursR, ventesVendeurR, forecastVendeurR,
       mouvementsR,
     ] = await Promise.all([
 
@@ -30,7 +32,6 @@ router.get('/', async (req, res) => {
           COALESCE(SUM(quantite*COALESCE(NULLIF(cout_unitaire,0),0)) FILTER (WHERE EXTRACT(YEAR FROM date_vente)=$3), 0) AS cout_ytd,
           COALESCE(SUM(montant) FILTER (WHERE statut_paiement != 'Paye'), 0) AS total_creances,
           COUNT(*) FILTER (WHERE statut_paiement != 'Paye') AS nb_creances,
-          COALESCE(SUM(montant) FILTER (WHERE statut_paiement = 'Paye'), 0) AS total_paye,
           COALESCE(SUM(montant), 0) AS total_facture
         FROM ventes WHERE user_id = ANY($1::uuid[])`,
         [ids, m, y]
@@ -68,9 +69,9 @@ router.get('/', async (req, res) => {
 
       pool.query(`
         SELECT statut, COUNT(*) AS nb
-        FROM clients WHERE user_id = ANY($1::uuid[])
+        FROM clients WHERE rizerie_id = (SELECT rizerie_id FROM users WHERE id=$1 LIMIT 1)
         GROUP BY statut`,
-        [ids]
+        [req.userId]
       ),
 
       pool.query(`
@@ -102,6 +103,18 @@ router.get('/', async (req, res) => {
         [ids, y]
       ),
 
+      // Encaissements réels : somme des versements reçus (par date de versement, pas de vente)
+      pool.query(`
+        SELECT
+          COALESCE(SUM(ver.montant) FILTER (WHERE EXTRACT(MONTH FROM ver.date)=$2 AND EXTRACT(YEAR FROM ver.date)=$3), 0) AS encaisse_mois,
+          COALESCE(SUM(ver.montant) FILTER (WHERE EXTRACT(YEAR FROM ver.date)=$3), 0) AS encaisse_ytd,
+          COALESCE(SUM(ver.montant), 0) AS encaisse_total
+        FROM versements ver
+        JOIN ventes v ON v.id = ver.vente_id
+        WHERE v.user_id = ANY($1::uuid[])`,
+        [ids, m, y]
+      ),
+
       pool.query(`SELECT id, nom FROM users WHERE id = ANY($1::uuid[]) AND role='vendeur'`, [ids]),
 
       pool.query(`
@@ -131,8 +144,9 @@ router.get('/', async (req, res) => {
 
     const k = kpis.rows[0];
     const cr = creances.rows[0];
+    const ver = versementsR.rows[0];
     const clientsStatut = {};
-    alertes.rows.forEach(r => { clientsStatut[r.statut] = +r.nb; });
+    clientsStatutR.rows.forEach(r => { clientsStatut[r.statut] = +r.nb; });
 
     const caYTD = +k.ca_ytd;
     const objAnnuel = +objAnnuelR.rows[0].obj;
@@ -167,8 +181,11 @@ router.get('/', async (req, res) => {
         nb_creances: +k.nb_creances,
         pipeline_espere: +mv.pipeline_espere,
         pipeline_nb: +mv.pipeline_nb,
+        // Taux de recouvrement = versements réellement reçus / total facturé
+        encaisse_mois:  +ver.encaisse_mois,
+        encaisse_ytd:   +ver.encaisse_ytd,
         taux_recouvrement: +k.total_facture > 0
-          ? Math.round(+k.total_paye / +k.total_facture * 100)
+          ? Math.round(+ver.encaisse_total / +k.total_facture * 100)
           : null,
         clients_actifs: clientsStatut['Actif'] || 0,
         clients_prospects: clientsStatut['Prospect'] || 0,

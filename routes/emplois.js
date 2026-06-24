@@ -40,6 +40,13 @@ router.post('/', async (req, res) => {
     if (role_plateforme) {
       if (!ROLES_PLATEFORME.includes(role_plateforme))
         return res.status(400).json({ error: 'Rôle plateforme invalide (vendeur, manager, directeur)' });
+
+      // Seul directeur/rizier peut créer des comptes ; manager peut créer vendeur uniquement
+      const peutCreer = ['rizier', 'directeur'].includes(req.userRole)
+        || (req.userRole === 'manager' && role_plateforme === 'vendeur');
+      if (!peutCreer)
+        return res.status(403).json({ error: 'Vous n\'avez pas le droit de créer ce type de compte' });
+
       if (!email)
         return res.status(400).json({ error: 'Email requis pour créer un compte plateforme' });
       if (!password || password.length < 12)

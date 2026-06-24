@@ -14,9 +14,9 @@ async function getUserRizerieId(userId) {
   return r.rows[0]?.rizerie_id || null;
 }
 
-// directeur/rizier/manager voient tout dans la rizerie, vendeur voit ses propres clients
+// Tout le monde voit tous les clients de la rizerie — les droits de modification diffèrent
 function readClause(role, rizerieId, scopeIds) {
-  if (['directeur', 'rizier', 'superadmin', 'support', 'manager'].includes(role)) {
+  if (rizerieId) {
     return { clause: 'c.rizerie_id = $1', params: [rizerieId] };
   }
   return { clause: 'c.user_id = ANY($1::uuid[])', params: [scopeIds] };
@@ -92,10 +92,14 @@ router.get('/', async (req, res) => {
     q += ' ORDER BY c.statut, c.nom';
     const result = await pool.query(q, params);
 
-    const canEditAll = ['directeur', 'rizier', 'superadmin', 'manager'].includes(req.userRole);
+    // directeur/rizier/superadmin : modifient tout
+    // manager : modifie clients de son équipe (scopeIds)
+    // vendeur : modifie seulement ses propres clients
+    const canEditAll = ['directeur', 'rizier', 'superadmin'].includes(req.userRole);
+    const scopeSet = new Set(req.scopeIds.map(String));
     const rows = result.rows.map(r => ({
       ...r,
-      can_edit: canEditAll || r.user_id === req.userId,
+      can_edit: canEditAll || scopeSet.has(String(r.user_id)),
       can_delete: ['directeur', 'rizier', 'superadmin'].includes(req.userRole),
     }));
     res.json(rows);
@@ -173,10 +177,11 @@ router.get('/:id', async (req, res) => {
     }
     if (!result.rows.length) return res.status(404).json({ error: 'Client non trouvé' });
     const c = result.rows[0];
-    const canEditAll = ['directeur', 'rizier', 'superadmin', 'manager'].includes(req.userRole);
+    const canEditAll = ['directeur', 'rizier', 'superadmin'].includes(req.userRole);
+    const scopeSet = new Set(req.scopeIds.map(String));
     res.json({
       ...c,
-      can_edit: canEditAll || c.user_id === req.userId,
+      can_edit: canEditAll || scopeSet.has(String(c.user_id)),
       can_delete: ['directeur', 'rizier', 'superadmin'].includes(req.userRole),
     });
   } catch (err) {
@@ -194,11 +199,11 @@ router.put('/:id', async (req, res) => {
     if (statut && !STATUTS_VALIDES.includes(statut)) return res.status(400).json({ error: 'Statut invalide' });
 
     const rizerieId = await getUserRizerieId(req.userId);
-    const canEditAll = ['directeur', 'rizier', 'superadmin', 'manager'].includes(req.userRole);
+    const canEditAll = ['directeur', 'rizier', 'superadmin'].includes(req.userRole);
 
     const access = canEditAll && rizerieId
       ? await pool.query('SELECT id FROM clients WHERE id=$1 AND rizerie_id=$2', [req.params.id, rizerieId])
-      : await pool.query('SELECT id FROM clients WHERE id=$1 AND user_id=$2', [req.params.id, req.userId]);
+      : await pool.query('SELECT id FROM clients WHERE id=$1 AND user_id = ANY($2::uuid[])', [req.params.id, req.scopeIds]);
     if (!access.rows.length) return res.status(403).json({ error: 'Modification non autorisée pour ce client' });
 
     const result = await pool.query(
@@ -225,11 +230,11 @@ router.patch('/:id/statut', async (req, res) => {
     if (!STATUTS_VALIDES.includes(statut)) return res.status(400).json({ error: 'Statut invalide' });
 
     const rizerieId = await getUserRizerieId(req.userId);
-    const canEditAll = ['directeur', 'rizier', 'superadmin', 'manager'].includes(req.userRole);
+    const canEditAll = ['directeur', 'rizier', 'superadmin'].includes(req.userRole);
 
     const access = canEditAll && rizerieId
       ? await pool.query('SELECT id FROM clients WHERE id=$1 AND rizerie_id=$2', [req.params.id, rizerieId])
-      : await pool.query('SELECT id FROM clients WHERE id=$1 AND user_id=$2', [req.params.id, req.userId]);
+      : await pool.query('SELECT id FROM clients WHERE id=$1 AND user_id = ANY($2::uuid[])', [req.params.id, req.scopeIds]);
     if (!access.rows.length) return res.status(403).json({ error: 'Modification non autorisée pour ce client' });
 
     const result = await pool.query(
