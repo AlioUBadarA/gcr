@@ -141,6 +141,36 @@ router.put('/:id', canManage, attachScopeIds, async (req, res) => {
   }
 });
 
+// PATCH /api/equipe/:id/role — promouvoir un commercial en manager
+// Directeur, rizier ou superadmin uniquement.
+router.patch('/:id/role', attachScopeIds, async (req, res) => {
+  if (!['directeur', 'rizier', 'superadmin'].includes(req.userRole))
+    return res.status(403).json({ error: 'Seul le directeur ou le rizier peut promouvoir un commercial' });
+  try {
+    const { role } = req.body;
+    if (role !== 'manager')
+      return res.status(400).json({ error: 'Seule la promotion au rang de manager est supportée' });
+
+    const target = await pool.query(
+      `SELECT id FROM users WHERE id=$1 AND id = ANY($2::uuid[]) AND role='vendeur'`,
+      [req.params.id, req.scopeIds]
+    );
+    if (!target.rows.length)
+      return res.status(404).json({ error: 'Commercial non trouvé dans votre périmètre' });
+
+    // Le nouveau manager est rattaché directement au requester (directeur/rizier)
+    const result = await pool.query(
+      `UPDATE users SET role='manager', parent_id=$1 WHERE id=$2
+       RETURNING id, nom, role, parent_id`,
+      [req.userId, req.params.id]
+    );
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('PATCH equipe role:', err.message);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
 // PATCH /api/equipe/:id/manager — réaffecter un commercial à un autre manager
 // Seul le directeur (ou superadmin) peut faire ça.
 router.patch('/:id/manager', attachScopeIds, async (req, res) => {
