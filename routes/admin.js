@@ -845,4 +845,120 @@ router.get('/audit', async (req, res) => {
   }
 });
 
+// ══════════════════════════════════════════════════════════════
+// PERFORMANCE & IMPACT RIZAO
+// ══════════════════════════════════════════════════════════════
+
+// GET /api/admin/performance
+router.get('/performance', async (req, res) => {
+  try {
+    const [globalR, mensuelR, parRizerieR, baselines, contratsR, emploisR] = await Promise.all([
+      pool.query(`
+        SELECT
+          COALESCE(SUM(v.montant), 0)                                               AS ca_app,
+          COUNT(DISTINCT v.id)                                                       AS nb_ventes,
+          COUNT(DISTINCT v.client_nom)                                               AS nb_clients,
+          COUNT(DISTINCT v.id) FILTER (WHERE v.statut_paiement = 'Paye')            AS nb_paye,
+          COUNT(DISTINCT v.id) FILTER (WHERE v.statut_paiement = 'En cours')        AS nb_en_cours,
+          COUNT(DISTINCT v.id) FILTER (WHERE v.statut_paiement = 'En retard')       AS nb_retard,
+          COALESCE(SUM(vers.montant), 0)                                             AS total_verse
+        FROM ventes v
+        LEFT JOIN versements vers ON vers.vente_id = v.id
+      `),
+      pool.query(`
+        SELECT
+          TO_CHAR(date_trunc('month', date_vente), 'YYYY-MM') AS mois,
+          COALESCE(SUM(montant), 0) AS ca
+        FROM ventes
+        WHERE date_vente >= date_trunc('month', NOW()) - INTERVAL '11 months'
+        GROUP BY mois
+        ORDER BY mois
+      `),
+      pool.query(`
+        SELECT
+          r.id, r.nom,
+          r.ca_baseline, r.emplois_baseline, r.masse_salariale_baseline,
+          COALESCE((
+            SELECT SUM(v.montant) FROM ventes v
+            JOIN users u ON u.id = v.user_id WHERE u.rizerie_id = r.id
+          ), 0) AS ca_app,
+          COALESCE((
+            SELECT SUM(ver.montant) FROM versements ver
+            JOIN ventes v ON v.id = ver.vente_id
+            JOIN users u ON u.id = v.user_id WHERE u.rizerie_id = r.id
+          ), 0) AS total_verse,
+          COALESCE((
+            SELECT COUNT(DISTINCT v.id) FROM ventes v
+            JOIN users u ON u.id = v.user_id WHERE u.rizerie_id = r.id
+          ), 0) AS nb_ventes,
+          COALESCE((
+            SELECT COUNT(DISTINCT v.client_nom) FROM ventes v
+            JOIN users u ON u.id = v.user_id WHERE u.rizerie_id = r.id
+          ), 0) AS nb_clients,
+          COALESCE((
+            SELECT COUNT(*) FROM emplois e
+            JOIN users u ON u.id = e.user_id WHERE u.rizerie_id = r.id
+          ), 0) AS emplois_app
+        FROM rizeries r
+        ORDER BY r.nom
+      `),
+      pool.query(`
+        SELECT
+          COALESCE(SUM(ca_baseline), 0)              AS ca_baseline_total,
+          COALESCE(SUM(emplois_baseline), 0)         AS emplois_baseline_total,
+          COALESCE(SUM(masse_salariale_baseline), 0) AS masse_salariale_baseline_total
+        FROM rizeries
+      `),
+      pool.query(`
+        SELECT COUNT(*) FILTER (WHERE statut = 'Actif') AS actifs FROM contrats_clients
+      `),
+      pool.query(`SELECT COUNT(*) AS nb FROM emplois`),
+    ]);
+
+    const g = globalR.rows[0];
+    const b = baselines.rows[0];
+    const ca_app = Number(g.ca_app);
+    const taux_recouvrement = ca_app > 0
+      ? Math.round(Number(g.total_verse) / ca_app * 100)
+      : 0;
+
+    res.json({
+      global: {
+        ca_app,
+        ca_baseline_total:              Number(b.ca_baseline_total),
+        nb_ventes:                      Number(g.nb_ventes),
+        nb_clients:                     Number(g.nb_clients),
+        nb_paye:                        Number(g.nb_paye),
+        nb_en_cours:                    Number(g.nb_en_cours),
+        nb_retard:                      Number(g.nb_retard),
+        taux_recouvrement,
+        emplois_baseline_total:         Number(b.emplois_baseline_total),
+        emplois_app:                    Number(emploisR.rows[0].nb),
+        emplois_total:                  Number(b.emplois_baseline_total) + Number(emploisR.rows[0].nb),
+        contrats_actifs:                Number(contratsR.rows[0].actifs),
+        masse_salariale_baseline_total: Number(b.masse_salariale_baseline_total),
+      },
+      mensuel: mensuelR.rows.map(r => ({ mois: r.mois, ca: Number(r.ca) })),
+      parRizerie: parRizerieR.rows.map(r => ({
+        id:                       r.id,
+        nom:                      r.nom,
+        ca_baseline:              Number(r.ca_baseline || 0),
+        ca_app:                   Number(r.ca_app),
+        emplois_baseline:         Number(r.emplois_baseline || 0),
+        emplois_app:              Number(r.emplois_app),
+        emplois_total:            Number(r.emplois_baseline || 0) + Number(r.emplois_app),
+        masse_salariale_baseline: Number(r.masse_salariale_baseline || 0),
+        nb_ventes:                Number(r.nb_ventes),
+        nb_clients:               Number(r.nb_clients),
+        taux_recouvrement:        Number(r.ca_app) > 0
+          ? Math.round(Number(r.total_verse) / Number(r.ca_app) * 100)
+          : 0,
+      })),
+    });
+  } catch (err) {
+    console.error('admin performance:', err.message);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
 module.exports = router;
