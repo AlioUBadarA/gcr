@@ -208,8 +208,10 @@ router.post('/:id/relances', async (req, res) => {
   }
 });
 
-// DELETE /api/ventes/:id
+// DELETE /api/ventes/:id — manager, directeur, rizier, superadmin uniquement
 router.delete('/:id', async (req, res) => {
+  if (!['manager', 'directeur', 'rizier', 'superadmin'].includes(req.userRole))
+    return res.status(403).json({ error: 'Suppression réservée au manager' });
   try {
     const ids = req.scopeIds;
     const result = await pool.query(
