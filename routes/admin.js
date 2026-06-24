@@ -227,47 +227,57 @@ router.get('/users/:id', async (req, res) => {
   }
 });
 
-// POST /api/admin/users/:id/vendeurs — créer un vendeur ou un manager pour un rizier
-router.post('/users/:id/vendeurs', async (req, res) => {
+// Handler partagé : créer un directeur / manager / vendeur rattaché à un rizier.
+// Accessible via POST /api/admin/users/:id/membre  (nouvelle route)
+//              et  POST /api/admin/users/:id/vendeurs (ancienne route, rétrocompat)
+// rizerie_id et rizerie (nom texte) sont automatiquement copiés depuis le rizier.
+async function createMembreHandler(req, res) {
   try {
     const rizierR = await pool.query(
-      `SELECT id, nom FROM users WHERE id=$1 AND role='rizier'`, [req.params.id]
+      `SELECT u.id, u.nom, u.rizerie_id, r.nom AS rizerie_nom
+       FROM users u
+       LEFT JOIN rizeries r ON r.id = u.rizerie_id
+       WHERE u.id=$1 AND u.role='rizier'`,
+      [req.params.id]
     );
     if (!rizierR.rows.length) return res.status(404).json({ error: 'Rizier non trouvé' });
+    const rizier = rizierR.rows[0];
 
-    const { nom, email, password, telephone, role, zone, manager_id } = req.body;
+    const { nom, email, password, telephone, role, zone } = req.body;
     if (!nom || !email || !password)
       return res.status(400).json({ error: 'Nom, email et mot de passe requis' });
     if (password.length < 12)
       return res.status(400).json({ error: 'Mot de passe : 12 caractères minimum' });
-    const wantsManager = role === 'manager';
+
+    const targetRole = ['directeur','manager','vendeur'].includes(role) ? role : 'vendeur';
+
+    if (targetRole === 'directeur' && req.userRole !== 'superadmin')
+      return res.status(403).json({ error: 'Seul le superadmin peut créer un directeur' });
 
     const exists = await pool.query('SELECT id FROM users WHERE email=$1', [email.toLowerCase()]);
     if (exists.rows.length) return res.status(409).json({ error: 'Cet email est déjà utilisé' });
 
-    let parentId = req.params.id;
-    if (!wantsManager && manager_id) {
-      const mgr = await pool.query(`SELECT id FROM users WHERE id=$1 AND parent_id=$2 AND role='manager'`, [manager_id, req.params.id]);
-      if (!mgr.rows.length) return res.status(400).json({ error: 'Manager invalide' });
-      parentId = manager_id;
-    }
-
     const hash = await bcrypt.hash(password, 12);
     const result = await pool.query(
-      `INSERT INTO users (nom, email, password, telephone, role, parent_id, zone)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)
-       RETURNING id, nom, email, telephone, role, zone, parent_id, created_at`,
+      `INSERT INTO users (nom, email, password, telephone, role, parent_id, zone, rizerie_id, rizerie)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       RETURNING id, nom, email, telephone, role, zone, parent_id, rizerie_id, created_at`,
       [nom.trim(), email.toLowerCase().trim(), hash, telephone || null,
-       wantsManager ? 'manager' : 'vendeur', parentId, wantsManager ? (zone || null) : null]
+       targetRole, rizier.id, zone || null,
+       rizier.rizerie_id || null, rizier.rizerie_nom || null]
     );
-    await log(req.userId, req.userNom, wantsManager ? 'MANAGER_CREATED' : 'VENDEUR_CREATED',
-              result.rows[0], { rizier: rizierR.rows[0].nom, email }, req.ip);
+    const actionMap = { directeur: 'DIRECTEUR_CREATED', manager: 'MANAGER_CREATED', vendeur: 'VENDEUR_CREATED' };
+    await log(req.userId, req.userNom, actionMap[targetRole],
+              result.rows[0], { rizier: rizier.nom, email }, req.ip);
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    console.error('admin create vendeur:', err.message);
+    console.error('admin create membre:', err.message);
     res.status(500).json({ error: 'Erreur serveur' });
   }
-});
+}
+
+router.post('/users/:id/membre',  createMembreHandler);
+router.post('/users/:id/vendeurs', createMembreHandler); // rétrocompat
 
 // POST /api/admin/users — créer un compte rizier
 router.post('/users', async (req, res) => {

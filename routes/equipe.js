@@ -102,13 +102,20 @@ router.post('/', canManage, async (req, res) => {
     const exists = await pool.query('SELECT id FROM users WHERE email=$1', [email.toLowerCase()]);
     if (exists.rows.length) return res.status(409).json({ error: 'Cet email est déjà utilisé' });
 
+    // Récupère rizerie_id + rizerie depuis le créateur pour les propager au nouveau compte
+    const creatorR = await pool.query(
+      'SELECT rizerie_id, rizerie FROM users WHERE id=$1', [req.userId]
+    );
+    const creator = creatorR.rows[0] || {};
+
     const hash = await bcrypt.hash(password, 12);
     const result = await pool.query(
-      `INSERT INTO users (nom, email, password, telephone, role, parent_id, zone)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)
-       RETURNING id, nom, email, telephone, role, zone, parent_id, created_at`,
+      `INSERT INTO users (nom, email, password, telephone, role, parent_id, zone, rizerie_id, rizerie)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       RETURNING id, nom, email, telephone, role, zone, parent_id, rizerie_id, created_at`,
       [nom.trim(), email.toLowerCase().trim(), hash, telephone || null,
-       targetRole, parentId, zone || null]
+       targetRole, parentId, zone || null,
+       creator.rizerie_id || null, creator.rizerie || null]
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
