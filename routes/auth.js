@@ -20,7 +20,11 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ error: 'Email et mot de passe requis' });
 
     const result = await pool.query(
-      'SELECT id, nom, email, password, rizerie, telephone, ville, role, suspended, suspended_reason FROM users WHERE email = $1',
+      `SELECT u.id, u.nom, u.email, u.password, u.rizerie, u.telephone, u.ville,
+              u.role, u.suspended, u.suspended_reason, r.pays
+       FROM users u
+       LEFT JOIN rizeries r ON r.id = u.rizerie_id
+       WHERE u.email = $1`,
       [email.toLowerCase().trim()]
     );
     if (!result.rows.length)
@@ -40,7 +44,7 @@ router.post('/login', async (req, res) => {
       { expiresIn: '14d' }
     );
 
-    res.json({ token, user: { id: user.id, nom: user.nom, email: user.email, rizerie: user.rizerie, telephone: user.telephone, ville: user.ville, role: user.role } });
+    res.json({ token, user: { id: user.id, nom: user.nom, email: user.email, rizerie: user.rizerie, telephone: user.telephone, ville: user.ville, role: user.role, pays: user.pays || null } });
   } catch (err) {
     console.error('login:', err.message);
     res.status(500).json({ error: 'Erreur serveur' });
@@ -52,7 +56,10 @@ const auth = require('../middleware/auth');
 router.get('/me', auth, async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT id, nom, email, rizerie, telephone, ville, created_at FROM users WHERE id = $1',
+      `SELECT u.id, u.nom, u.email, u.rizerie, u.telephone, u.ville, u.created_at, r.pays
+       FROM users u
+       LEFT JOIN rizeries r ON r.id = u.rizerie_id
+       WHERE u.id = $1`,
       [req.userId]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Utilisateur non trouve' });
