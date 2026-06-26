@@ -6,8 +6,9 @@ const { getScopeIds } = require('../middleware/scope');
 const router = express.Router();
 router.use(auth);
 
+// La clé utilise l'ID de l'entité (pas le message) pour rester stable d'un jour à l'autre.
 function alertKey(a) {
-  return `${a.cat || ''}|${a.owner || ''}|${a.msg || ''}`;
+  return `${a.cat || ''}|${a.owner || ''}|${a.entity_id || ''}`;
 }
 
 // GET /api/actions — moteur d'alertes unifié (client inactif >60j, créance >30j, objectif atteinte<80%)
@@ -72,6 +73,7 @@ router.get('/', async (req, res) => {
         valeur: +c.ca_total,
         owner: c.vendeur_id,
         owner_nom: c.vendeur_nom,
+        entity_id: c.id,
       });
     });
 
@@ -85,6 +87,7 @@ router.get('/', async (req, res) => {
         valeur: +v.montant,
         owner: v.user_id,
         owner_nom: v.vendeur_nom,
+        entity_id: v.id,
       });
     });
 
@@ -102,6 +105,7 @@ router.get('/', async (req, res) => {
         valeur: Math.max(0, objAnnuel - ca),
         owner: vd.id,
         owner_nom: vd.nom,
+        entity_id: `${vd.id}|${annee}`,
       });
     });
 

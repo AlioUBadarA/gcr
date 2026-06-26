@@ -129,9 +129,11 @@ router.put('/visites/:id', async (req, res) => {
     const { commentaire, jour } = req.body;
     if (jour && !JOURS.includes(jour)) return res.status(400).json({ error: 'Jour invalide' });
     const result = await pool.query(
-      `UPDATE pilotage_visites SET commentaire=$1, jour=COALESCE($2, jour)
-       WHERE id=$3 AND user_id=$4 RETURNING *`,
-      [commentaire ?? null, jour || null, req.params.id, req.userId]
+      `UPDATE pilotage_visites
+       SET commentaire = CASE WHEN $1::boolean THEN $2 ELSE commentaire END,
+           jour        = COALESCE($3, jour)
+       WHERE id=$4 AND user_id=$5 RETURNING *`,
+      ['commentaire' in req.body, req.body.commentaire ?? null, jour || null, req.params.id, req.userId]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Visite non trouvée' });
     res.json(result.rows[0]);
