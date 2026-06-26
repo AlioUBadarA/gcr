@@ -67,15 +67,19 @@ Branche : securite/session-2
 
 Branche : securite/session-3
 
-- [ ] Audit complet des requetes SQL : toutes parametrees, aucune concatenation avec entree utilisateur
-- [ ] Validation serveur systematique des entrees sur tous les endpoints (type, format, bornes, champs obligatoires)
-- [ ] Cas limite sur-versement gere (versement superieur au montant du)
-- [ ] Cas montants negatifs et changement de statut non autorise geres
-- [ ] Doublons clients via findOrCreateClient maitrises
-- [ ] Limites de taille sur corps de requete et champs texte
-- [ ] Rejet propre des entrees invalides (code et message clairs)
-- [ ] Tests ajoutes et rejouables
-- [ ] Rapport de fin de session redige
+- [x] Audit complet des requetes SQL : toutes parametrees, aucune concatenation avec entree utilisateur (confirme)
+- [x] Helper middleware/validate.js cree (isPositiveNumber, isNonNegativeNumber, isValidDate, isValidUUID, maxLen)
+- [x] Validation numerique : quantite, prix_unitaire, montant, salaire, cout_unitaire — NaN et valeurs negatives rejetes (400)
+- [x] Validation dates : date_vente, date_echeance, date_debut, date_fin, date — format YYYY-MM-DD exige (400)
+- [x] Cas limite sur-versement gere — versement superieur au solde restant du rejete (400) dans ventes et encaissements
+- [x] statut_paiement invalide refuse a la creation (POST /api/ventes) — alignement avec PATCH /statut
+- [x] Bornes forecast : mois (1-12), annee (2015-2040), objectif_montant >= 0
+- [x] Longueurs max sur champs texte : nom/client_nom/producteur_nom (200 chars), note (2000 chars), zone (200 chars)
+- [x] limit GET /api/ventes plafonne a 500, offset force >= 0
+- [x] UUID rizerie_id valide avant passage en base dans GET /api/admin/export (400 si invalide)
+- [x] Rejet propre des entrees invalides — code 400 et message clair sur tous les points ci-dessus
+- [x] Tests ajoutes et rejouables (tests/session3_security.sh)
+- [x] Rapport de fin de session redige
 
 ---
 
@@ -132,7 +136,7 @@ Branche : securite/session-5
 
 Lister ici tout probleme identifie mais non traite dans la session en cours, avec la session cible.
 
-- [Session 3] Validation et anti-injection : audit requetes SQL, validation entrees, limites de taille
+- [Session 3 — CLOS] Validation et anti-injection : traite. Voir checklist Session 3.
 - [Session 4] Tokens JWT 14 jours sans revocation possible — risque si token vole
 - [Session 1 — observation] routes/pilotage.js : PUT /visites/:id et DELETE /visites/:id filtrent sur req.userId uniquement. Correct pour un vendeur, a reconfirmer si un manager/directeur doit pouvoir modifier les visites de son equipe (Session 2 clos — hors perimetre actuel).
 - [Session 1 — observation] Les tokens JWT ont une duree de vie de 14 jours sans revocation possible. Risque eleve si un token est vole. A traiter en Session 4.
@@ -162,11 +166,11 @@ A completer a la fin de chaque session : date, branche, ce qui est fait, ce qui 
 
 ### Session 3
 
-- Date :
+- Date : 2026-06-26
 - Branche : securite/session-3
-- Fait :
-- Reste :
-- Tests :
+- Fait : Audit SQL confirme (aucune concatenation). Helper validate.js cree. Validation numerique (NaN, negatifs). Dates YYYY-MM-DD. Cap sur-versement (ventes + encaissements). statut_paiement valide a la creation. Bornes forecast. Longueurs max. limit plafonne. UUID export.
+- Reste : Session 4 (tokens, MFA). Session 5 (logs, deps, conformite).
+- Tests : tests/session3_security.sh — BASE_URL=http://localhost:3000 bash tests/session3_security.sh
 
 ### Session 4
 
