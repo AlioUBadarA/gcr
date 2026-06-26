@@ -12,6 +12,18 @@ router.post('/register', (req, res) => {
   });
 });
 
+// Écrit un événement de sécurité dans audit_logs (non bloquant — erreur silencieuse).
+async function secLog(action, targetId, targetNom, detail, ip) {
+  try {
+    await pool.query(
+      `INSERT INTO audit_logs (actor_id, actor_nom, action, target_id, target_nom, detail, ip)
+       VALUES (NULL, NULL, $1, $2, $3, $4, $5)`,
+      [action, targetId || null, targetNom || null,
+       detail ? JSON.stringify(detail) : null, ip || null]
+    );
+  } catch (_) {}
+}
+
 // POST /api/auth/login
 const MAX_ATTEMPTS = 5;
 const LOCK_MINUTES = 15;
@@ -34,6 +46,7 @@ router.post('/login', async (req, res) => {
 
     // Réponse générique pour ne pas révéler si l'email existe
     if (!result.rows.length) {
+      await secLog('LOGIN_UNKNOWN_EMAIL', null, null, { email: email.toLowerCase().trim() }, req.ip);
       return res.status(401).json({ error: 'Email ou mot de passe incorrect' });
     }
 
@@ -43,6 +56,7 @@ router.post('/login', async (req, res) => {
     if (user.locked_until && new Date(user.locked_until) > new Date()) {
       const secondes = Math.ceil((new Date(user.locked_until) - new Date()) / 1000);
       const minutes  = Math.ceil(secondes / 60);
+      await secLog('LOGIN_BLOCKED_LOCKOUT', user.id, user.nom, { email: user.email }, req.ip);
       return res.status(429).json({
         error: `Trop de tentatives. Compte bloqué pour encore ${minutes} minute${minutes > 1 ? 's' : ''}.`
       });
@@ -64,10 +78,14 @@ router.post('/login', async (req, res) => {
         [newAttempts, lockUntil, user.id]
       );
       if (newAttempts >= MAX_ATTEMPTS) {
+        await secLog('LOGIN_ACCOUNT_LOCKED', user.id, user.nom,
+          { email: user.email, attempts: newAttempts, locked_until: lockUntil }, req.ip);
         return res.status(429).json({
           error: `Trop de tentatives. Compte bloqué pour ${LOCK_MINUTES} minutes.`
         });
       }
+      await secLog('LOGIN_FAILED', user.id, user.nom,
+        { email: user.email, attempts: newAttempts }, req.ip);
       return res.status(401).json({ error: 'Email ou mot de passe incorrect' });
     }
 
@@ -76,6 +94,7 @@ router.post('/login', async (req, res) => {
       `UPDATE users SET login_attempts=0, locked_until=NULL WHERE id=$1`,
       [user.id]
     );
+    await secLog('LOGIN_SUCCESS', user.id, user.nom, { email: user.email, role: user.role }, req.ip);
 
     const token = jwt.sign(
       { userId: user.id, nom: user.nom, role: user.role },
