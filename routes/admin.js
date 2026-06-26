@@ -436,6 +436,8 @@ router.post('/users/:id/impersonate', async (req, res) => {
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Utilisateur non trouvé' });
     const target = result.rows[0];
+    if (['superadmin', 'support'].includes(target.role))
+      return res.status(403).json({ error: 'Impossible d\'impersonner un compte superadmin ou support' });
     if (target.suspended) return res.status(400).json({ error: 'Impossible d\'accéder à un compte suspendu' });
 
     // Token courte durée (2h) pour l'impersonation
