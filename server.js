@@ -11,9 +11,6 @@ const PORT = process.env.PORT || 3000;
 // ── Securite ──────────────────────────────────────────────────
 app.set('trust proxy', 1); // Render passe par un reverse proxy
 app.use(helmet());
-if (process.env.NODE_ENV === 'production' && !process.env.FRONTEND_URL) {
-  console.warn('ATTENTION: FRONTEND_URL non definie en production - CORS retombe sur "*" (toutes origines autorisees).');
-}
 app.use(cors({
   origin: process.env.FRONTEND_URL || '*',
   methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
@@ -82,6 +79,10 @@ async function start() {
   }
   if (!process.env.JWT_SECRET) {
     console.error('ERREUR: JWT_SECRET manquant dans les variables d\'environnement');
+    process.exit(1);
+  }
+  if (process.env.NODE_ENV === 'production' && !process.env.FRONTEND_URL) {
+    console.error('ERREUR: FRONTEND_URL manquant en production - CORS "*" interdit. Configurez la variable d\'environnement.');
     process.exit(1);
   }
   try {
