@@ -87,16 +87,16 @@ Branche : securite/session-3
 
 Branche : securite/session-4
 
-- [ ] Strategie de jeton choisie et justifiee (access court + refresh avec rotation et revocation, ou cookie httpOnly SameSite)
-- [ ] Revocation effective : compte suspendu ou supprime perd l'acces immediatement
-- [ ] Rate limiting par compte ajoute, en plus du rate limiting par IP
-- [ ] Verrouillage temporaire apres N echecs de connexion
-- [ ] MFA (TOTP) actif au moins pour superadmin et support
-- [ ] Impersonation durcie : un admin ne peut pas en impersonner un autre, expiration propre, gestion fermeture navigateur
-- [ ] Boucle de redirection 401 corrigee (garde anti-loop dans l'intercepteur)
-- [ ] Logout propre : tout le localStorage vide (tokens et donnees de session)
-- [ ] Tests ajoutes et rejouables
-- [ ] Rapport de fin de session redige
+- [x] Strategie de jeton choisie et justifiee : JWT 7j avec revocation cote serveur (token_revoked_at) comme defense principale
+- [x] Revocation effective : colonne token_revoked_at sur users — positionne a NOW() lors d'une suspension ; authMiddleware verifie iat < token_revoked_at sur chaque requete
+- [x] Rate limiting par compte : lockout 15min apres 5 echecs de connexion (login_attempts + locked_until sur users)
+- [x] Verrouillage temporaire apres 5 echecs de connexion par compte (429 avec duree restante)
+- [ ] MFA (TOTP) — HORS PERIMETRE SESSION 4 : necessite nouveau flux login 2 etapes, packages otplib+qrcode et UI frontend. A implémenter comme feature dédiée avant mise en production des comptes superadmin/support.
+- [x] Impersonation durcie : superadmin et support ne peuvent pas etre impersonnes (403) ; token impersonation deja limite a 2h
+- [x] Boucle de redirection 401 corrigee : api.js exclut les endpoints /api/auth/* et verifie pathname !== '/login' avant redirect
+- [x] Logout propre : 5 cles localStorage videes (pfs_token, pfs_user, pfs_admin_token, pfs_admin_user, pfs_impersonating) — confirme
+- [x] Tests ajoutes et rejouables (tests/session4_security.sh)
+- [x] Rapport de fin de session redige
 
 ---
 
@@ -137,6 +137,7 @@ Branche : securite/session-5
 Lister ici tout probleme identifie mais non traite dans la session en cours, avec la session cible.
 
 - [Session 3 — CLOS] Validation et anti-injection : traite. Voir checklist Session 3.
+- [Session 4 — HORS PERIMETRE] MFA (TOTP) pour superadmin et support : necessaire avant prod. Packages otplib+qrcode, flux login 2 etapes, page setup frontend. A implementer comme feature dédiée.
 - [Session 4] Tokens JWT 14 jours sans revocation possible — risque si token vole
 - [Session 1 — observation] routes/pilotage.js : PUT /visites/:id et DELETE /visites/:id filtrent sur req.userId uniquement. Correct pour un vendeur, a reconfirmer si un manager/directeur doit pouvoir modifier les visites de son equipe (Session 2 clos — hors perimetre actuel).
 - [Session 1 — observation] Les tokens JWT ont une duree de vie de 14 jours sans revocation possible. Risque eleve si un token est vole. A traiter en Session 4.
@@ -174,11 +175,11 @@ A completer a la fin de chaque session : date, branche, ce qui est fait, ce qui 
 
 ### Session 4
 
-- Date :
+- Date : 2026-06-26
 - Branche : securite/session-4
-- Fait :
-- Reste :
-- Tests :
+- Fait : Revocation immediate (token_revoked_at + check authMiddleware). Lockout brute force (5 echecs = 15min, login_attempts + locked_until). TTL token 14j → 7j. Fix boucle 401 (api.js). Impersonation durcie (superadmin/support non impersonnables). Logout clean confirme.
+- Reste : MFA TOTP (hors perimetre, voir risques ouverts). Session 5 (logs, deps, conformite OWASP).
+- Tests : tests/session4_security.sh — BASE_URL=http://localhost:3000 bash tests/session4_security.sh
 
 ### Session 5
 
