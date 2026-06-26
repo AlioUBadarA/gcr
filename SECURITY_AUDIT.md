@@ -22,9 +22,9 @@ Roles : vendeur, manager, directeur, rizier, support, superadmin.
 |---|---|---|---|---|
 | B1 | Critique | GET /api/auth/me ne retourne pas le role | routes/auth.js:57 | **Corrige** (session 1) |
 | B2 | Critique | DELETE /api/ventes/:id, support non autorise | routes/ventes.js:213 | **Corrige** (session 1) |
-| B3 | Moyenne | Scope recursif, directeur sous directeur exclu | middleware/scope.js:17 | A faire (session 2) |
+| B3 | Moyenne | Scope recursif, directeur sous directeur exclu | middleware/scope.js:17 | **Corrige** (session 2) |
 | B4 | Moyenne | Vendeur accede a /pilotage via URL directe | src/App.jsx:73 | **Corrige** (session 1) |
-| B5 | Moyenne | PUT /api/ventes/:id, manager modifie les ventes de ses vendeurs | routes/ventes.js:110 | A faire (session 2) |
+| B5 | Moyenne | PUT /api/ventes/:id, manager modifie les ventes de ses vendeurs | routes/ventes.js:110 | **Corrige** (session 2) |
 | B6 | Elevee | CORS retombe sur "*" si FRONTEND_URL absent en prod | server.js:14 | **Corrige** (session 1) |
 
 ---
@@ -52,14 +52,14 @@ Branche : securite/session-1
 
 Branche : securite/session-2
 
-- [ ] B5 corrige : politique PUT definie, documentee et appliquee
-- [ ] B3 corrige : requete recursive de scope reparee (directeur sous directeur inclus)
-- [ ] Controle de propriete (anti-IDOR) sur toutes les routes par identifiant : ventes, clients, contrats, encaissements, equipe
-- [ ] Un compte support ne peut pas modifier ou supprimer un superadmin
-- [ ] scopeIds applique sur toutes les lectures et ecritures, pas seulement certaines listes
-- [ ] Tests par role : impossible de lire ou modifier un objet hors perimetre, meme en manipulant les URLs
-- [ ] Tests ajoutes et rejouables
-- [ ] Rapport de fin de session redige
+- [x] B5 corrige : vendeur et manager limites a leurs propres ventes sur PUT ; directeur+ garde le scope complet
+- [x] B3 corrige : CTE recursive repare (u.role inclut desormais 'directeur' dans la partie recursive)
+- [x] Controle de propriete (anti-IDOR) verifie sur ventes, clients, contrats, encaissements, equipe — scopeIds ou rizerieId filtrent toutes les operations
+- [x] Un compte support ne peut pas modifier, suspendre, reinitialiser le mdp ou supprimer un superadmin (403)
+- [x] scopeIds applique sur toutes les lectures et ecritures — verifie route par route
+- [x] Lacune S1 corrigee : POST /api/encaissements/:type/:id/versements maintenant restreint a manager+ via la matrice
+- [x] Tests ajoutes et rejouables (tests/session2_security.sh)
+- [x] Rapport de fin de session redige
 
 ---
 
@@ -132,9 +132,9 @@ Branche : securite/session-5
 
 Lister ici tout probleme identifie mais non traite dans la session en cours, avec la session cible.
 
-- [Session 2] B3 : scope recursif directeur sous directeur — middleware/scope.js:17
-- [Session 2] B5 : PUT /api/ventes/:id accessible au manager sur ventes de ses vendeurs — routes/ventes.js:110
-- [Session 2] Controle de propriete (anti-IDOR) systematique sur toutes les routes par :id a verifier
+- [Session 3] Validation et anti-injection : audit requetes SQL, validation entrees, limites de taille
+- [Session 4] Tokens JWT 14 jours sans revocation possible — risque si token vole
+- [Session 1 — observation] routes/pilotage.js : PUT /visites/:id et DELETE /visites/:id filtrent sur req.userId uniquement. Correct pour un vendeur, a reconfirmer si un manager/directeur doit pouvoir modifier les visites de son equipe (Session 2 clos — hors perimetre actuel).
 - [Session 1 — observation] Les tokens JWT ont une duree de vie de 14 jours sans revocation possible. Risque eleve si un token est vole. A traiter en Session 4.
 - [Session 1 — observation] routes/pilotage.js : les routes PUT /visites/:id et DELETE /visites/:id filtrent sur req.userId mais n'utilisent pas scopeIds. Correct pour un vendeur qui modifie ses propres visites, a reconfirmer en Session 2.
 
@@ -154,11 +154,11 @@ A completer a la fin de chaque session : date, branche, ce qui est fait, ce qui 
 
 ### Session 2
 
-- Date :
+- Date : 2026-06-26
 - Branche : securite/session-2
-- Fait :
-- Reste :
-- Tests :
+- Fait : B3 et B5 corriges. Anti-IDOR support→superadmin (4 routes admin). Lacune S1 corrigee (encaissements versements). Verification scope sur toutes les routes.
+- Reste : Session 3 (validation entrees, SQL), Session 4 (tokens, MFA).
+- Tests : tests/session2_security.sh — BASE_URL=http://localhost:3000 bash tests/session2_security.sh
 
 ### Session 3
 
