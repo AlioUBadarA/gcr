@@ -2,6 +2,7 @@ const express = require('express');
 const { pool, nextNumero } = require('../db/pool');
 const auth = require('../middleware/auth');
 const { attachScopeIds } = require('../middleware/scope');
+const { requirePerm } = require('../middleware/permissions');
 const { findOrCreateClient } = require('./clients');
 
 const router = express.Router();
@@ -134,7 +135,7 @@ router.put('/:id', async (req, res) => {
 });
 
 // PATCH /api/ventes/:id/statut
-router.patch('/:id/statut', async (req, res) => {
+router.patch('/:id/statut', requirePerm('ventes:statut'), async (req, res) => {
   try {
     const { statut_paiement } = req.body;
     if (!STATUTS.includes(statut_paiement))
@@ -165,7 +166,7 @@ router.get('/:id/versements', async (req, res) => {
 });
 
 // POST /api/ventes/:id/versements — enregistrer un encaissement (paiement échelonné)
-router.post('/:id/versements', async (req, res) => {
+router.post('/:id/versements', requirePerm('ventes:versement'), async (req, res) => {
   try {
     const { montant, mode, date } = req.body;
     if (!montant || montant <= 0) return res.status(400).json({ error: 'Montant requis et positif' });
@@ -208,10 +209,8 @@ router.post('/:id/relances', async (req, res) => {
   }
 });
 
-// DELETE /api/ventes/:id — manager, directeur, rizier, superadmin uniquement
-router.delete('/:id', async (req, res) => {
-  if (!['manager', 'directeur', 'rizier', 'superadmin'].includes(req.userRole))
-    return res.status(403).json({ error: 'Suppression réservée au manager' });
+// DELETE /api/ventes/:id
+router.delete('/:id', requirePerm('ventes:delete'), async (req, res) => {
   try {
     const ids = req.scopeIds;
     const result = await pool.query(
