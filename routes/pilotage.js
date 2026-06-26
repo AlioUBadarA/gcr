@@ -2,9 +2,10 @@ const express = require('express');
 const { pool } = require('../db/pool');
 const auth = require('../middleware/auth');
 const { attachScopeIds } = require('../middleware/scope');
+const { requirePerm } = require('../middleware/permissions');
 
 const router = express.Router();
-router.use(auth);
+router.use(auth, requirePerm('pilotage:access'));
 
 const JOURS = ['Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi'];
 
