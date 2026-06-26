@@ -21,7 +21,7 @@ async function getScopeIds(userId, role) {
       UNION ALL
       SELECT u.id, u.role FROM users u
         INNER JOIN team t ON u.parent_id = t.id
-        WHERE u.role IN ('manager','vendeur') AND t.role IN ('directeur','manager')
+        WHERE u.role IN ('directeur','manager','vendeur') AND t.role IN ('directeur','manager')
     )
     SELECT id FROM team
   `, [userId]);
