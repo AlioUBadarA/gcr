@@ -51,9 +51,13 @@ router.get('/', async (req, res) => {
       ),
 
       pool.query(`
-        SELECT client_nom, COALESCE(SUM(montant),0) AS ca_total, COUNT(*) AS nb_ventes
-        FROM ventes WHERE user_id = ANY($1::uuid[])
-        GROUP BY client_nom ORDER BY ca_total DESC LIMIT 10`,
+        SELECT COALESCE(c.nom, v.client_nom) AS nom,
+               COALESCE(SUM(v.montant),0) AS ca_total, COUNT(*) AS nb_ventes
+        FROM ventes v
+        LEFT JOIN clients c ON c.id = v.client_id
+        WHERE v.user_id = ANY($1::uuid[])
+        GROUP BY v.client_id, COALESCE(c.nom, v.client_nom)
+        ORDER BY ca_total DESC LIMIT 10`,
         [ids]
       ),
 
@@ -103,15 +107,16 @@ router.get('/', async (req, res) => {
         [ids, y]
       ),
 
-      // Encaissements réels : somme des versements reçus (par date de versement, pas de vente)
+      // Encaissements réels : versements sur ventes ET sur contrats clients (par date de versement)
       pool.query(`
         SELECT
           COALESCE(SUM(ver.montant) FILTER (WHERE EXTRACT(MONTH FROM ver.date)=$2 AND EXTRACT(YEAR FROM ver.date)=$3), 0) AS encaisse_mois,
           COALESCE(SUM(ver.montant) FILTER (WHERE EXTRACT(YEAR FROM ver.date)=$3), 0) AS encaisse_ytd,
           COALESCE(SUM(ver.montant), 0) AS encaisse_total
         FROM versements ver
-        JOIN ventes v ON v.id = ver.vente_id
-        WHERE v.user_id = ANY($1::uuid[])`,
+        LEFT JOIN ventes             v  ON v.id  = ver.vente_id
+        LEFT JOIN contrats_clients   cc ON cc.id = ver.contrat_client_id
+        WHERE v.user_id = ANY($1::uuid[]) OR cc.user_id = ANY($1::uuid[])`,
         [ids, m, y]
       ),
 
@@ -199,7 +204,7 @@ router.get('/', async (req, res) => {
         nb_encours: +cr.nb_encours,
       },
       ca_mensuel: mensuel.rows.map(r => ({ annee: r.annee, mois: r.mois, ca: +r.ca })),
-      top_clients: topClients.rows.map(r => ({ nom: r.client_nom, ca_total: +r.ca_total, nb_ventes: +r.nb_ventes })),
+      top_clients: topClients.rows.map(r => ({ nom: r.nom, ca_total: +r.ca_total, nb_ventes: +r.nb_ventes })),
       ca_par_segment: segmentR.rows.map(r => ({ segment: r.segment, ca: +r.ca })),
       ca_par_region:  regionR.rows.map(r => ({ region: r.region, ca: +r.ca })),
       ca_par_produit: produitR.rows.map(r => ({ produit: r.produit, ca: +r.ca })),
