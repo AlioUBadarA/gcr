@@ -2,6 +2,7 @@ const express = require('express');
 const { pool } = require('../db/pool');
 const auth = require('../middleware/auth');
 const { getScopeIds } = require('../middleware/scope');
+const { isNonNegativeNumber } = require('../middleware/validate');
 
 const router = express.Router();
 router.use(auth);
@@ -96,6 +97,14 @@ router.post('/', async (req, res) => {
     const { annee, mois, objectif_montant } = req.body;
     if (!annee || !mois || objectif_montant == null)
       return res.status(400).json({ error: 'annee, mois, objectif_montant requis' });
+    const anneeN = Number(annee);
+    const moisN  = Number(mois);
+    if (!Number.isInteger(moisN) || moisN < 1 || moisN > 12)
+      return res.status(400).json({ error: 'mois doit etre un entier entre 1 et 12' });
+    if (!Number.isInteger(anneeN) || anneeN < 2015 || anneeN > 2040)
+      return res.status(400).json({ error: 'annee doit etre un entier entre 2015 et 2040' });
+    if (!isNonNegativeNumber(objectif_montant))
+      return res.status(400).json({ error: 'objectif_montant doit etre un nombre positif ou nul' });
 
     const result = await pool.query(
       `INSERT INTO forecast (user_id, annee, mois, produit, objectif_montant)
