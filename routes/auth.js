@@ -56,7 +56,7 @@ const auth = require('../middleware/auth');
 router.get('/me', auth, async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT u.id, u.nom, u.email, u.rizerie, u.telephone, u.ville, u.created_at, r.pays
+      `SELECT u.id, u.nom, u.email, u.rizerie, u.telephone, u.ville, u.role, u.created_at, r.pays
        FROM users u
        LEFT JOIN rizeries r ON r.id = u.rizerie_id
        WHERE u.id = $1`,
