@@ -3,10 +3,11 @@ const VALID_ROLES = new Set(['vendeur', 'manager', 'directeur', 'rizier', 'suppo
 
 // Matrice role × action. Ajouter ici pour étendre, jamais dans les routes.
 const PERMISSIONS = {
-  'ventes:delete':    ['manager', 'directeur', 'rizier', 'support', 'superadmin'],
-  'ventes:versement': ['manager', 'directeur', 'rizier', 'support', 'superadmin'],
-  'ventes:statut':    ['manager', 'directeur', 'rizier', 'support', 'superadmin'],
-  'pilotage:access':  ['manager', 'directeur', 'rizier'],
+  'ventes:delete':            ['manager', 'directeur', 'rizier', 'support', 'superadmin'],
+  'ventes:versement':         ['manager', 'directeur', 'rizier', 'support', 'superadmin'],
+  'ventes:statut':            ['manager', 'directeur', 'rizier', 'support', 'superadmin'],
+  'encaissements:versement':  ['manager', 'directeur', 'rizier', 'support', 'superadmin'],
+  'pilotage:access':          ['manager', 'directeur', 'rizier'],
 };
 
 /**
