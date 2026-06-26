@@ -210,14 +210,21 @@ router.post('/:id/versements', requirePerm('ventes:versement'), async (req, res)
     const venteR = await pool.query('SELECT * FROM ventes WHERE id=$1 AND user_id = ANY($2::uuid[])', [req.params.id, ids]);
     if (!venteR.rows.length) return res.status(404).json({ error: 'Vente non trouvee' });
 
+    const totalDejaR = await pool.query(
+      'SELECT COALESCE(SUM(montant),0) AS total FROM versements WHERE vente_id=$1', [req.params.id]
+    );
+    const totalDeja = +totalDejaR.rows[0].total;
+    const restant   = +venteR.rows[0].montant - totalDeja;
+    if (restant <= 0) return res.status(400).json({ error: 'Vente deja entierement payee' });
+    if (+montant > restant)
+      return res.status(400).json({ error: `Versement excessif : montant maximum autorise est ${restant}` });
+
     const result = await pool.query(
       `INSERT INTO versements (vente_id, montant, mode, date) VALUES ($1,$2,$3,$4) RETURNING *`,
       [req.params.id, +montant, mode || null, date || new Date().toISOString().slice(0, 10)]
     );
 
-    // Si le total encaissé couvre le montant de la vente, on la marque payée.
-    const totalR = await pool.query('SELECT COALESCE(SUM(montant),0) AS total FROM versements WHERE vente_id=$1', [req.params.id]);
-    if (+totalR.rows[0].total >= +venteR.rows[0].montant) {
+    if (totalDeja + +montant >= +venteR.rows[0].montant) {
       await pool.query("UPDATE ventes SET statut_paiement='Paye' WHERE id=$1", [req.params.id]);
     }
     res.status(201).json(result.rows[0]);

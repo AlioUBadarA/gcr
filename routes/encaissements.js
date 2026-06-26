@@ -3,6 +3,7 @@ const { pool } = require('../db/pool');
 const auth = require('../middleware/auth');
 const { attachScopeIds } = require('../middleware/scope');
 const { requirePerm } = require('../middleware/permissions');
+const { isPositiveNumber, isValidDate } = require('../middleware/validate');
 
 const router = express.Router();
 router.use(auth, attachScopeIds);
@@ -107,8 +108,9 @@ router.post('/:type/:id/versements', requirePerm('encaissements:versement'), asy
     const target = targetTable(req.params.type);
     if (!target) return res.status(400).json({ error: 'Type invalide' });
     const { montant, mode, date } = req.body;
-    if (!montant || montant <= 0) return res.status(400).json({ error: 'Montant requis et positif' });
+    if (!isPositiveNumber(montant)) return res.status(400).json({ error: 'montant doit etre un nombre positif' });
     if (mode && !MODES.includes(mode)) return res.status(400).json({ error: 'Mode de paiement invalide' });
+    if (date && !isValidDate(date)) return res.status(400).json({ error: 'date invalide (format YYYY-MM-DD attendu)' });
 
     const ids = req.scopeIds;
     const ownsR = await pool.query(
@@ -117,12 +119,23 @@ router.post('/:type/:id/versements', requirePerm('encaissements:versement'), asy
     );
     if (!ownsR.rows.length) return res.status(404).json({ error: 'Transaction non trouvee' });
 
+    // Cap sur-versement : le versement ne peut pas dépasser le solde restant dû
+    if (req.params.type === 'vente') {
+      const totalDejaR = await pool.query(
+        'SELECT COALESCE(SUM(montant),0) AS total FROM versements WHERE vente_id=$1', [req.params.id]
+      );
+      const totalDeja = +totalDejaR.rows[0].total;
+      const restant   = +ownsR.rows[0].montant - totalDeja;
+      if (restant <= 0) return res.status(400).json({ error: 'Vente deja entierement payee' });
+      if (+montant > restant)
+        return res.status(400).json({ error: `Versement excessif : montant maximum autorise est ${restant}` });
+    }
+
     const result = await pool.query(
       `INSERT INTO versements (${target.column}, montant, mode, date) VALUES ($1,$2,$3,$4) RETURNING *`,
       [req.params.id, +montant, mode || null, date || new Date().toISOString().slice(0, 10)]
     );
 
-    // Pour une vente, on clôture automatiquement (statut Payé) une fois le solde couvert.
     if (req.params.type === 'vente') {
       const totalR = await pool.query('SELECT COALESCE(SUM(montant),0) AS total FROM versements WHERE vente_id=$1', [req.params.id]);
       if (+totalR.rows[0].total >= +ownsR.rows[0].montant) {
