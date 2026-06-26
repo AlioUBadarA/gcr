@@ -2,6 +2,7 @@ const express = require('express');
 const { pool } = require('../db/pool');
 const auth = require('../middleware/auth');
 const { attachScopeIds } = require('../middleware/scope');
+const { isNonNegativeNumber, maxLen } = require('../middleware/validate');
 
 const router = express.Router();
 router.use(auth, attachScopeIds);
@@ -116,6 +117,13 @@ router.post('/', async (req, res) => {
             volume_estime, frequence, valorise, horaire, note, produits_interet } = req.body;
     if (!nom || !type) return res.status(400).json({ error: 'Nom et type requis' });
     if (!TYPES_VALIDES.includes(type)) return res.status(400).json({ error: 'Type invalide' });
+    if (!maxLen(nom, 200))  return res.status(400).json({ error: 'nom trop long (200 caracteres max)' });
+    if (!maxLen(zone, 200)) return res.status(400).json({ error: 'zone trop longue (200 caracteres max)' });
+    if (!maxLen(note, 2000)) return res.status(400).json({ error: 'note trop longue (2000 caracteres max)' });
+    if (potentiel_annuel !== undefined && potentiel_annuel !== null && !isNonNegativeNumber(potentiel_annuel))
+      return res.status(400).json({ error: 'potentiel_annuel doit etre un nombre positif ou nul' });
+    if (volume_estime !== undefined && volume_estime !== null && !isNonNegativeNumber(volume_estime))
+      return res.status(400).json({ error: 'volume_estime doit etre un nombre positif ou nul' });
 
     const rizerieId = await getUserRizerieId(req.userId);
 
@@ -197,6 +205,13 @@ router.put('/:id', async (req, res) => {
             volume_estime, frequence, valorise, horaire, note, produits_interet } = req.body;
     if (type && !TYPES_VALIDES.includes(type)) return res.status(400).json({ error: 'Type invalide' });
     if (statut && !STATUTS_VALIDES.includes(statut)) return res.status(400).json({ error: 'Statut invalide' });
+    if (!maxLen(nom, 200))  return res.status(400).json({ error: 'nom trop long (200 caracteres max)' });
+    if (!maxLen(zone, 200)) return res.status(400).json({ error: 'zone trop longue (200 caracteres max)' });
+    if (!maxLen(note, 2000)) return res.status(400).json({ error: 'note trop longue (2000 caracteres max)' });
+    if (potentiel_annuel !== undefined && potentiel_annuel !== null && !isNonNegativeNumber(potentiel_annuel))
+      return res.status(400).json({ error: 'potentiel_annuel doit etre un nombre positif ou nul' });
+    if (volume_estime !== undefined && volume_estime !== null && !isNonNegativeNumber(volume_estime))
+      return res.status(400).json({ error: 'volume_estime doit etre un nombre positif ou nul' });
 
     const rizerieId = await getUserRizerieId(req.userId);
     const canEditAll = ['directeur', 'rizier', 'superadmin'].includes(req.userRole);

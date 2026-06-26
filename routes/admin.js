@@ -2,6 +2,7 @@ const express = require('express');
 const bcrypt  = require('bcryptjs');
 const jwt     = require('jsonwebtoken');
 const { pool, withTransaction, reassignVendeurData } = require('../db/pool');
+const { isValidUUID } = require('../middleware/validate');
 const auth    = require('../middleware/auth');
 const isAdmin = require('../middleware/isAdmin');
 const { requireSuperadmin } = isAdmin;
@@ -786,6 +787,8 @@ function rowsToCsv(rows, cols) {
 router.get('/export', async (req, res) => {
   try {
     const { type = 'ventes', periode = 'mois', annee, valeur, rizerie_id } = req.query;
+    if (rizerie_id && !isValidUUID(rizerie_id))
+      return res.status(400).json({ error: 'rizerie_id invalide (UUID attendu)' });
     const { debut, fin } = getDateRange(periode, annee, valeur);
 
     // Tous les paramètres passent par des placeholders — jamais d'interpolation de chaîne.

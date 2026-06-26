@@ -15,7 +15,9 @@ const MODES   = ['Espèces','Virement','Chèque','Mobile Money'];
 // GET /api/ventes  (avec filtres)
 router.get('/', async (req, res) => {
   try {
-    const { mois, annee, statut, client_id, limit = 200, offset = 0 } = req.query;
+    const { mois, annee, statut, client_id } = req.query;
+    const limit  = Math.min(Math.max(0, parseInt(req.query.limit)  || 200), 500);
+    const offset = Math.max(0, parseInt(req.query.offset) || 0);
     const ids = req.scopeIds;
     let q = `SELECT v.*, c.type as client_type, u.nom as vendeur_nom,
                     COALESCE(ve.total_verse, 0) AS total_verse,
