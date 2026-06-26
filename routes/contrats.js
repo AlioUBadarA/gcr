@@ -3,6 +3,7 @@ const { pool, nextNumero } = require('../db/pool');
 const auth = require('../middleware/auth');
 const { getScopeIds } = require('../middleware/scope');
 const { findOrCreateClient } = require('./clients');
+const { isPositiveNumber, isNonNegativeNumber, isValidDate, maxLen } = require('../middleware/validate');
 
 const router = express.Router();
 router.use(auth);
@@ -41,6 +42,16 @@ router.post('/clients', async (req, res) => {
     const { client_id, client_nom, produits, quantite_mensuelle, prix_unitaire, date_debut, date_fin, statut, note } = req.body;
     const produitsArr = Array.isArray(produits) && produits.length > 0 ? produits : [];
     if (!client_nom || !produitsArr.length) return res.status(400).json({ error: 'Client et au moins un produit requis' });
+    if (quantite_mensuelle !== undefined && quantite_mensuelle !== null && !isNonNegativeNumber(quantite_mensuelle))
+      return res.status(400).json({ error: 'quantite_mensuelle doit etre un nombre positif ou nul' });
+    if (prix_unitaire !== undefined && prix_unitaire !== null && !isNonNegativeNumber(prix_unitaire))
+      return res.status(400).json({ error: 'prix_unitaire doit etre un nombre positif ou nul' });
+    if (date_debut && !isValidDate(date_debut))
+      return res.status(400).json({ error: 'date_debut invalide (format YYYY-MM-DD attendu)' });
+    if (date_fin && !isValidDate(date_fin))
+      return res.status(400).json({ error: 'date_fin invalide (format YYYY-MM-DD attendu)' });
+    if (!maxLen(client_nom, 200)) return res.status(400).json({ error: 'client_nom trop long (200 caracteres max)' });
+    if (!maxLen(note, 2000))      return res.status(400).json({ error: 'note trop longue (2000 caracteres max)' });
 
     let resolvedClientId = client_id || null;
     if (!resolvedClientId) {
@@ -69,6 +80,16 @@ router.put('/clients/:id', async (req, res) => {
     const { client_nom, produits, quantite_mensuelle, prix_unitaire, date_debut, date_fin, statut, note } = req.body;
     const produitsArr = Array.isArray(produits) && produits.length > 0 ? produits : [];
     if (!produitsArr.length) return res.status(400).json({ error: 'Au moins un produit requis' });
+    if (quantite_mensuelle !== undefined && quantite_mensuelle !== null && !isNonNegativeNumber(quantite_mensuelle))
+      return res.status(400).json({ error: 'quantite_mensuelle doit etre un nombre positif ou nul' });
+    if (prix_unitaire !== undefined && prix_unitaire !== null && !isNonNegativeNumber(prix_unitaire))
+      return res.status(400).json({ error: 'prix_unitaire doit etre un nombre positif ou nul' });
+    if (date_debut && !isValidDate(date_debut))
+      return res.status(400).json({ error: 'date_debut invalide (format YYYY-MM-DD attendu)' });
+    if (date_fin && !isValidDate(date_fin))
+      return res.status(400).json({ error: 'date_fin invalide (format YYYY-MM-DD attendu)' });
+    if (!maxLen(client_nom, 200)) return res.status(400).json({ error: 'client_nom trop long (200 caracteres max)' });
+    if (!maxLen(note, 2000))      return res.status(400).json({ error: 'note trop longue (2000 caracteres max)' });
     const ids = await getScopeIds(req.userId, req.userRole);
     const result = await pool.query(
       `UPDATE contrats_clients SET client_nom=$1, produit=$2, produits=$3, quantite_mensuelle=$4,
@@ -131,6 +152,16 @@ router.post('/paddy', async (req, res) => {
   try {
     const { producteur_nom, zone, telephone, variete, quantite_kg, prix_kg, date_debut, date_fin, statut, note } = req.body;
     if (!producteur_nom) return res.status(400).json({ error: 'Nom du producteur requis' });
+    if (quantite_kg !== undefined && quantite_kg !== null && !isNonNegativeNumber(quantite_kg))
+      return res.status(400).json({ error: 'quantite_kg doit etre un nombre positif ou nul' });
+    if (prix_kg !== undefined && prix_kg !== null && !isNonNegativeNumber(prix_kg))
+      return res.status(400).json({ error: 'prix_kg doit etre un nombre positif ou nul' });
+    if (date_debut && !isValidDate(date_debut))
+      return res.status(400).json({ error: 'date_debut invalide (format YYYY-MM-DD attendu)' });
+    if (date_fin && !isValidDate(date_fin))
+      return res.status(400).json({ error: 'date_fin invalide (format YYYY-MM-DD attendu)' });
+    if (!maxLen(producteur_nom, 200)) return res.status(400).json({ error: 'producteur_nom trop long (200 caracteres max)' });
+    if (!maxLen(note, 2000))          return res.status(400).json({ error: 'note trop longue (2000 caracteres max)' });
     const numero = await nextNumero('contrats_paddy', 'CP', req.userId);
     const result = await pool.query(
       `INSERT INTO contrats_paddy (user_id, producteur_nom, zone, telephone, variete, quantite_kg, prix_kg, date_debut, date_fin, statut, note, numero)
@@ -150,6 +181,16 @@ router.post('/paddy', async (req, res) => {
 router.put('/paddy/:id', async (req, res) => {
   try {
     const { producteur_nom, zone, telephone, variete, quantite_kg, prix_kg, date_debut, date_fin, statut, note } = req.body;
+    if (quantite_kg !== undefined && quantite_kg !== null && !isNonNegativeNumber(quantite_kg))
+      return res.status(400).json({ error: 'quantite_kg doit etre un nombre positif ou nul' });
+    if (prix_kg !== undefined && prix_kg !== null && !isNonNegativeNumber(prix_kg))
+      return res.status(400).json({ error: 'prix_kg doit etre un nombre positif ou nul' });
+    if (date_debut && !isValidDate(date_debut))
+      return res.status(400).json({ error: 'date_debut invalide (format YYYY-MM-DD attendu)' });
+    if (date_fin && !isValidDate(date_fin))
+      return res.status(400).json({ error: 'date_fin invalide (format YYYY-MM-DD attendu)' });
+    if (!maxLen(producteur_nom, 200)) return res.status(400).json({ error: 'producteur_nom trop long (200 caracteres max)' });
+    if (!maxLen(note, 2000))          return res.status(400).json({ error: 'note trop longue (2000 caracteres max)' });
     const ids = await getScopeIds(req.userId, req.userRole);
     const result = await pool.query(
       `UPDATE contrats_paddy SET producteur_nom=$1, zone=$2, telephone=$3, variete=$4,

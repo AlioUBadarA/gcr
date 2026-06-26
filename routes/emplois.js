@@ -2,6 +2,7 @@ const express = require('express');
 const bcrypt  = require('bcryptjs');
 const { pool } = require('../db/pool');
 const auth = require('../middleware/auth');
+const { isNonNegativeNumber, isValidDate, maxLen } = require('../middleware/validate');
 
 const router = express.Router();
 router.use(auth);
@@ -34,6 +35,14 @@ router.post('/', async (req, res) => {
     const { nom, poste, type_contrat, date_embauche, salaire, telephone, note,
             role_plateforme, email, password, periode_rizao } = req.body;
     if (!nom) return res.status(400).json({ error: 'Nom requis' });
+    if (salaire !== undefined && salaire !== null && !isNonNegativeNumber(salaire))
+      return res.status(400).json({ error: 'salaire doit etre un nombre positif ou nul' });
+    if (date_embauche && !isValidDate(date_embauche))
+      return res.status(400).json({ error: 'date_embauche invalide (format YYYY-MM-DD attendu)' });
+    if (type_contrat && !TYPES.includes(type_contrat))
+      return res.status(400).json({ error: 'type_contrat invalide' });
+    if (!maxLen(nom, 200))   return res.status(400).json({ error: 'nom trop long (200 caracteres max)' });
+    if (!maxLen(note, 2000)) return res.status(400).json({ error: 'note trop longue (2000 caracteres max)' });
 
     let userAccountId = null;
 
@@ -91,6 +100,14 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const { nom, poste, type_contrat, date_embauche, salaire, telephone, note, periode_rizao } = req.body;
+    if (salaire !== undefined && salaire !== null && !isNonNegativeNumber(salaire))
+      return res.status(400).json({ error: 'salaire doit etre un nombre positif ou nul' });
+    if (date_embauche && !isValidDate(date_embauche))
+      return res.status(400).json({ error: 'date_embauche invalide (format YYYY-MM-DD attendu)' });
+    if (type_contrat && !TYPES.includes(type_contrat))
+      return res.status(400).json({ error: 'type_contrat invalide' });
+    if (!maxLen(nom, 200))   return res.status(400).json({ error: 'nom trop long (200 caracteres max)' });
+    if (!maxLen(note, 2000)) return res.status(400).json({ error: 'note trop longue (2000 caracteres max)' });
     const periodeVal = ['Avant RIZAO', 'Avec RIZAO'].includes(periode_rizao) ? periode_rizao : 'Avec RIZAO';
     const result = await pool.query(
       `UPDATE emplois SET nom=$1, poste=$2, type_contrat=$3, date_embauche=$4,

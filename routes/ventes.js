@@ -4,6 +4,7 @@ const auth = require('../middleware/auth');
 const { attachScopeIds } = require('../middleware/scope');
 const { requirePerm } = require('../middleware/permissions');
 const { findOrCreateClient } = require('./clients');
+const { isPositiveNumber, isNonNegativeNumber, isValidDate, maxLen } = require('../middleware/validate');
 
 const router = express.Router();
 router.use(auth, attachScopeIds);
@@ -60,9 +61,22 @@ router.post('/', async (req, res) => {
     const { client_id, client_nom, date_vente, produit, quantite, prix_unitaire, statut_paiement, date_echeance, mode, cout_unitaire, note, telephone } = req.body;
     if (!client_nom || !date_vente || !produit || !quantite || !prix_unitaire)
       return res.status(400).json({ error: 'Champs requis : client_nom, date_vente, produit, quantite, prix_unitaire' });
-    if (quantite <= 0 || prix_unitaire <= 0)
-      return res.status(400).json({ error: 'Quantite et prix doivent etre positifs' });
+    if (!isPositiveNumber(quantite))
+      return res.status(400).json({ error: 'quantite doit etre un nombre positif' });
+    if (!isPositiveNumber(prix_unitaire))
+      return res.status(400).json({ error: 'prix_unitaire doit etre un nombre positif' });
+    if (cout_unitaire !== undefined && cout_unitaire !== null && !isNonNegativeNumber(cout_unitaire))
+      return res.status(400).json({ error: 'cout_unitaire doit etre un nombre positif ou nul' });
+    if (!isValidDate(date_vente))
+      return res.status(400).json({ error: 'date_vente invalide (format YYYY-MM-DD attendu)' });
+    if (date_echeance && !isValidDate(date_echeance))
+      return res.status(400).json({ error: 'date_echeance invalide (format YYYY-MM-DD attendu)' });
+    if (statut_paiement && !STATUTS.includes(statut_paiement))
+      return res.status(400).json({ error: 'statut_paiement invalide' });
     if (mode && !MODES.includes(mode)) return res.status(400).json({ error: 'Mode de paiement invalide' });
+    if (!maxLen(client_nom, 200)) return res.status(400).json({ error: 'client_nom trop long (200 caracteres max)' });
+    if (!maxLen(produit, 200))    return res.status(400).json({ error: 'produit trop long (200 caracteres max)' });
+    if (!maxLen(note, 2000))      return res.status(400).json({ error: 'note trop longue (2000 caracteres max)' });
 
     // Rattache la vente à un client existant (ou le crée) pour garder le portefeuille à jour.
     let resolvedClientId = client_id || null;
@@ -116,6 +130,18 @@ router.put('/:id', async (req, res) => {
     if (statut_paiement && !STATUTS.includes(statut_paiement))
       return res.status(400).json({ error: 'Statut invalide' });
     if (mode && !MODES.includes(mode)) return res.status(400).json({ error: 'Mode de paiement invalide' });
+    if (quantite !== undefined && !isPositiveNumber(quantite))
+      return res.status(400).json({ error: 'quantite doit etre un nombre positif' });
+    if (prix_unitaire !== undefined && !isPositiveNumber(prix_unitaire))
+      return res.status(400).json({ error: 'prix_unitaire doit etre un nombre positif' });
+    if (cout_unitaire !== undefined && cout_unitaire !== null && !isNonNegativeNumber(cout_unitaire))
+      return res.status(400).json({ error: 'cout_unitaire doit etre un nombre positif ou nul' });
+    if (date_vente && !isValidDate(date_vente))
+      return res.status(400).json({ error: 'date_vente invalide (format YYYY-MM-DD attendu)' });
+    if (date_echeance && !isValidDate(date_echeance))
+      return res.status(400).json({ error: 'date_echeance invalide (format YYYY-MM-DD attendu)' });
+    if (!maxLen(client_nom, 200)) return res.status(400).json({ error: 'client_nom trop long (200 caracteres max)' });
+    if (!maxLen(note, 2000))      return res.status(400).json({ error: 'note trop longue (2000 caracteres max)' });
 
     const ownerOnly = ['vendeur', 'manager'].includes(req.userRole);
     const filterClause = ownerOnly
@@ -176,8 +202,9 @@ router.get('/:id/versements', async (req, res) => {
 router.post('/:id/versements', requirePerm('ventes:versement'), async (req, res) => {
   try {
     const { montant, mode, date } = req.body;
-    if (!montant || montant <= 0) return res.status(400).json({ error: 'Montant requis et positif' });
+    if (!isPositiveNumber(montant)) return res.status(400).json({ error: 'montant doit etre un nombre positif' });
     if (mode && !MODES.includes(mode)) return res.status(400).json({ error: 'Mode de paiement invalide' });
+    if (date && !isValidDate(date)) return res.status(400).json({ error: 'date invalide (format YYYY-MM-DD attendu)' });
 
     const ids = req.scopeIds;
     const venteR = await pool.query('SELECT * FROM ventes WHERE id=$1 AND user_id = ANY($2::uuid[])', [req.params.id, ids]);
