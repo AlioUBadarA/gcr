@@ -108,6 +108,8 @@ router.get('/:id', async (req, res) => {
 });
 
 // PUT /api/ventes/:id
+// Politique B5 : vendeur et manager ne modifient que leurs propres ventes.
+// Directeur, rizier, support, superadmin : toute vente dans leur périmètre (scopeIds).
 router.put('/:id', async (req, res) => {
   try {
     const { client_id, client_nom, date_vente, produit, quantite, prix_unitaire, statut_paiement, date_echeance, mode, cout_unitaire, note } = req.body;
@@ -115,17 +117,22 @@ router.put('/:id', async (req, res) => {
       return res.status(400).json({ error: 'Statut invalide' });
     if (mode && !MODES.includes(mode)) return res.status(400).json({ error: 'Mode de paiement invalide' });
 
-    const ids = req.scopeIds;
+    const ownerOnly = ['vendeur', 'manager'].includes(req.userRole);
+    const filterClause = ownerOnly
+      ? 'user_id = $13'
+      : 'user_id = ANY($13::uuid[])';
+    const filterParam = ownerOnly ? req.userId : req.scopeIds;
+
     const result = await pool.query(
       `UPDATE ventes SET
          client_id=$1, client_nom=$2, date_vente=$3, produit=$4,
          quantite=$5, prix_unitaire=$6, statut_paiement=$7,
          date_echeance=$8, mode=$9, cout_unitaire=$10, note=$11
-       WHERE id=$12 AND user_id = ANY($13::uuid[]) RETURNING *`,
+       WHERE id=$12 AND ${filterClause} RETURNING *`,
       [client_id || null, client_nom, date_vente, produit,
        +quantite, +prix_unitaire, statut_paiement,
        date_echeance || null, mode || null, cout_unitaire || 0, note || null,
-       req.params.id, ids]
+       req.params.id, filterParam]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Vente non trouvee' });
     res.json(result.rows[0]);
