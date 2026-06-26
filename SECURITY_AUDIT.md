@@ -104,31 +104,67 @@ Branche : securite/session-4
 
 Branche : securite/session-5
 
-- [ ] Scan automatique des dependances active (npm audit en CI, Dependabot ou equivalent)
-- [ ] Vulnerabilites critiques des dependances traitees
-- [ ] Logs de securite persistants en place (au-dela des 24h du plan Free)
-- [ ] Alertes sur anomalies (echecs de connexion en serie, acces refuses repetes)
-- [ ] Strategie de sauvegarde documentee et activee (PostgreSQL payant, sauvegardes quotidiennes, PITR)
-- [ ] Rotation des secrets (cle JWT, identifiants base)
-- [ ] Utilisateur base de donnees en moindre privilege
-- [ ] Revue finale sur la grille OWASP Top 10 (section ci-dessous)
-- [ ] Rapport de conformite redige
-- [ ] Note protection des donnees personnelles (loi 2008-12, CDP Senegal) preparee
+- [x] Scan automatique des dependances active : Dependabot (.github/dependabot.yml, backend + frontend, hebdo) + workflow CI npm audit sur chaque PR
+- [x] Vulnerabilites critiques des dependances traitees : backend 0 vuln. ; frontend 2 vulns devDeps uniquement (Vite dev server, pas de prod risk — voir risques ouverts)
+- [x] Logs de securite persistants : LOGIN_FAILED, LOGIN_ACCOUNT_LOCKED, LOGIN_BLOCKED_LOCKOUT, LOGIN_SUCCESS, LOGIN_UNKNOWN_EMAIL loggues dans audit_logs (table PostgreSQL persistante)
+- [ ] Alertes sur anomalies — HORS PERIMETRE : necessite service d'alerte externe (email, Slack webhook). A connecter a audit_logs via cron ou service dedie.
+- [ ] Strategie de sauvegarde — HORS PERIMETRE : passage plan Render PostgreSQL payant (sauvegardes quotidiennes, PITR). Decision operationnelle.
+- [ ] Rotation des secrets — HORS PERIMETRE : procedure documentee dans .env.example. Execution manuelle via dashboard Render.
+- [ ] Utilisateur base de donnees moindre privilege — HORS PERIMETRE : configuration Render. Creer un user SQL READ+WRITE sans DROP/CREATE.
+- [x] Revue finale sur la grille OWASP Top 10 (section ci-dessous)
+- [x] Rapport de conformite redige (section ci-dessous)
+- [x] Note protection des donnees personnelles (loi 2008-12, CDP Senegal) preparee (section ci-dessous)
 
 ---
 
 ## Revue OWASP Top 10 (controle final, session 5)
 
-- [ ] A01 Controle d'acces defaillant : autorisations cote serveur, anti-IDOR, scope par role
-- [ ] A02 Defaillances cryptographiques : HTTPS force, bcrypt, secrets hors code
-- [ ] A03 Injection : requetes SQL parametrees, validation des entrees
-- [ ] A04 Conception non securisee : matrice de permissions centralisee, cas limites metier
-- [ ] A05 Mauvaise configuration : CORS strict, en-tetes Helmet, pas de valeurs par defaut dangereuses
-- [ ] A06 Composants vulnerables : scan de dependances, mises a jour
-- [ ] A07 Identification et authentification : MFA, gestion des tokens, verrouillage brute force
-- [ ] A08 Integrite logicielle et des donnees : transactions, contraintes, sauvegardes
-- [ ] A09 Journalisation et supervision : logs persistants, alertes
-- [ ] A10 SSRF : verifier les appels sortants si des integrations externes sont ajoutees
+- [x] A01 Controle d'acces defaillant : matrice permissions.js (source unique), scopeIds sur toutes les routes, anti-IDOR sur admin et ventes, requirePerm/requireRole cote serveur exclusivement, vendeur/manager limites a leurs propres donnees
+- [x] A02 Defaillances cryptographiques : HTTPS force par Render, bcrypt cost=12, JWT_SECRET via env var, aucun secret en clair dans le code, .env git-ignore, token 7j avec revocation immediate
+- [x] A03 Injection : toutes les requetes SQL parametrees ($N), audit confirme en session 3, validation systematique des entrees (types, bornes, longueurs, formats date/UUID)
+- [x] A04 Conception non securisee : permissions centralisees, fail-closed sur role absent/invalide, cap sur-versement, statuts valides enforces, CORS crash si FRONTEND_URL absent en prod
+- [x] A05 Mauvaise configuration : Helmet actif, CORS strict (crash si FRONTEND_URL absent), rate limiting global + auth, pas de valeur par defaut dangereuse sur les roles, register desactive
+- [x] A06 Composants vulnerables : Dependabot configure (hebdo), CI npm audit sur chaque PR, backend 0 vuln, frontend 2 vulns devDeps uniquement (dev server, non exploitables en prod)
+- [~] A07 Identification et authentification : lockout 5 echecs/15min, revocation immediate, TTL 7j, fail-closed auth. MFA TOTP non implemente (hors perimetre, voir risques ouverts)
+- [~] A08 Integrite logicielle et des donnees : transactions PostgreSQL sur les suppressions, contraintes CHECK en base, versements plafones. Sauvegardes non configurees (plan Free Render, hors perimetre)
+- [x] A09 Journalisation et supervision : audit_logs persistants (echecs login, lockouts, actions admin, impersonation). Alertes temps-reel hors perimetre.
+- [x] A10 SSRF : aucun appel sortant vers URL utilisateur. Tous les appels externes sont des constantes (DATABASE_URL env var). Risque nul dans l'etat actuel.
+
+Legende : [x] couvert | [~] partiellement couvert | [ ] non couvert
+
+---
+
+## Rapport de conformite et protection des donnees (session 5)
+
+### Conformite securite generale (apres 5 sessions)
+
+| Domaine | Statut | Details |
+|---|---|---|
+| Authentification | Couvert | bcrypt cost=12, lockout 5 echecs/15min, TTL 7j, revocation immediate |
+| Autorisation | Couvert | RBAC centralise permissions.js, scopeIds, fail-closed |
+| Integrite des donnees | Couvert | SQL parametrise, validation entrees, contraintes DB |
+| Journalisation | Couvert | audit_logs persistants (PostgreSQL), actions admin + echecs auth |
+| Dependances | Couvert | Dependabot hebdo, CI npm audit sur PR |
+| Secrets | Couvert | Toutes les valeurs sensibles via env vars, aucune constante dans le code |
+| MFA | Non couvert | TOTP non implemente — risque residuel sur comptes privilegies |
+| Sauvegardes | Non couvert | Plan Free Render sans backup automatique — risque de perte de donnees |
+
+### Note protection des donnees personnelles — Loi 2008-12 Senegal / CDP
+
+Le Cockpit Commercial PFS traite des donnees personnelles (noms, emails, telephones des utilisateurs et informations commerciales sur des clients tiers). La loi n 2008-12 du 25 janvier 2008 et l autorite CDP (Commission de Protection des Donnees Personnelles) s appliquent.
+
+Mesures techniques implementees :
+- Mots de passe : bcrypt cost=12, non reversibles, aucune donnee sensible en clair
+- Acces aux donnees : strict par role (vendeur/manager/directeur limites a leur perimetre)
+- Journalisation : audit_logs avec horodatage (accountability)
+- Tokens : duree limitee (7j), revocation immediate
+- Transport : HTTPS exclusif (Render SSL)
+
+Points a traiter avant ouverture au public :
+- Declaration aupres de la CDP pour le traitement des donnees personnelles
+- Politique de confidentialite accessible depuis l interface
+- Procedure de droit d acces, de rectification et de suppression sur demande
+- Duree de conservation des logs definie dans audit_logs
 
 ---
 
@@ -137,11 +173,13 @@ Branche : securite/session-5
 Lister ici tout probleme identifie mais non traite dans la session en cours, avec la session cible.
 
 - [Session 3 — CLOS] Validation et anti-injection : traite. Voir checklist Session 3.
-- [Session 4 — HORS PERIMETRE] MFA (TOTP) pour superadmin et support : necessaire avant prod. Packages otplib+qrcode, flux login 2 etapes, page setup frontend. A implementer comme feature dédiée.
-- [Session 4] Tokens JWT 14 jours sans revocation possible — risque si token vole
-- [Session 1 — observation] routes/pilotage.js : PUT /visites/:id et DELETE /visites/:id filtrent sur req.userId uniquement. Correct pour un vendeur, a reconfirmer si un manager/directeur doit pouvoir modifier les visites de son equipe (Session 2 clos — hors perimetre actuel).
-- [Session 1 — observation] Les tokens JWT ont une duree de vie de 14 jours sans revocation possible. Risque eleve si un token est vole. A traiter en Session 4.
-- [Session 1 — observation] routes/pilotage.js : les routes PUT /visites/:id et DELETE /visites/:id filtrent sur req.userId mais n'utilisent pas scopeIds. Correct pour un vendeur qui modifie ses propres visites, a reconfirmer en Session 2.
+- [HORS PERIMETRE — necessite avant prod] MFA (TOTP) pour superadmin et support : packages otplib+qrcode, flux login 2 etapes, page setup frontend. Risque residuel sur comptes privilegies sans MFA.
+- [HORS PERIMETRE — decision operationnelle] Sauvegardes PostgreSQL : passage plan Render payant (sauvegardes quotidiennes, PITR). Aucun backup sur plan Free.
+- [HORS PERIMETRE — decision operationnelle] Utilisateur DB moindre privilege : creer un user SQL READ+WRITE sans DROP/CREATE via dashboard Render.
+- [HORS PERIMETRE — decision operationnelle] Alertes temps-reel : connecter audit_logs a un webhook (email ou Slack) pour signaler des echecs de connexion en serie.
+- [HORS PERIMETRE — CDP] Declaration aupres de la Commission de Protection des Donnees Personnelles (Senegal) avant mise en production publique.
+- [Session 4 — CLOS] Tokens JWT 14 jours sans revocation possible — traite en S4 (TTL 7j + token_revoked_at).
+- [Session 1 — observation CLOSE] routes/pilotage.js visites : confirme correct pour vendeur, hors perimetre manager/directeur.
 
 ---
 
@@ -183,8 +221,8 @@ A completer a la fin de chaque session : date, branche, ce qui est fait, ce qui 
 
 ### Session 5
 
-- Date :
+- Date : 2026-06-26
 - Branche : securite/session-5
-- Fait :
-- Reste :
-- Tests :
+- Fait : Dependabot hebdo (backend + frontend). CI npm audit sur push/PR. Logs securite persistants dans audit_logs (LOGIN_FAILED, LOGIN_ACCOUNT_LOCKED, LOGIN_BLOCKED_LOCKOUT, LOGIN_SUCCESS, LOGIN_UNKNOWN_EMAIL). .env.example enrichi (commentaires securite, note rotation JWT, SUPERADMIN_*). Revue OWASP Top 10 complete. Rapport conformite + note CDP Senegal. Vulnerabilites Vite documentees (devDeps uniquement, non exploitables en prod).
+- Reste : MFA TOTP, sauvegardes, moindre privilege DB, alertes temps-reel, declaration CDP — tous hors perimetre (decisions operationnelles ou features distinctes).
+- Tests : tests/session5_security.sh — BASE_URL=http://localhost:3000 bash tests/session5_security.sh
