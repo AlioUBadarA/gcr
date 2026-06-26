@@ -384,7 +384,8 @@ router.patch('/users/:id/suspend', async (req, res) => {
 
     const result = await pool.query(
       `UPDATE users
-       SET suspended=$1, suspended_reason=$2, suspended_at=$3
+       SET suspended=$1, suspended_reason=$2, suspended_at=$3,
+           token_revoked_at = CASE WHEN $1 THEN NOW() ELSE token_revoked_at END
        WHERE id=$4
        RETURNING id, nom, email, suspended, suspended_reason`,
       [!!suspended, reason || null, suspended ? new Date() : null, req.params.id]

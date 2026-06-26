@@ -299,6 +299,10 @@ async function runMigrations() {
        last_val   INT NOT NULL DEFAULT 0,
        PRIMARY KEY (rizerie_id, table_name, year)
      )`,
+    // ── Session 4 : révocation de token et lockout brute force ───
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS token_revoked_at TIMESTAMPTZ`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS login_attempts   INT NOT NULL DEFAULT 0`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_until     TIMESTAMPTZ`,
     // Initialise les compteurs depuis les données existantes (idempotent grâce à ON CONFLICT DO NOTHING)
     `INSERT INTO transaction_counters (rizerie_id, table_name, year, last_val)
      SELECT u.rizerie_id, 'ventes', EXTRACT(YEAR FROM v.created_at)::INT, COUNT(*)::INT
