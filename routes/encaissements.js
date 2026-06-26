@@ -2,6 +2,7 @@ const express = require('express');
 const { pool } = require('../db/pool');
 const auth = require('../middleware/auth');
 const { attachScopeIds } = require('../middleware/scope');
+const { requirePerm } = require('../middleware/permissions');
 
 const router = express.Router();
 router.use(auth, attachScopeIds);
@@ -101,7 +102,7 @@ router.get('/:type/:id/versements', async (req, res) => {
 });
 
 // POST /api/encaissements/:type/:id/versements — enregistrer une tranche
-router.post('/:type/:id/versements', async (req, res) => {
+router.post('/:type/:id/versements', requirePerm('encaissements:versement'), async (req, res) => {
   try {
     const target = targetTable(req.params.type);
     if (!target) return res.status(400).json({ error: 'Type invalide' });
