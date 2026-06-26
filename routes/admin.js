@@ -347,6 +347,12 @@ router.post('/users', async (req, res) => {
 // PUT /api/admin/users/:id — modifier le profil
 router.put('/users/:id', async (req, res) => {
   try {
+    const targetR = await pool.query('SELECT id, nom, role FROM users WHERE id=$1', [req.params.id]);
+    if (!targetR.rows.length) return res.status(404).json({ error: 'Utilisateur non trouvé' });
+    const target = targetR.rows[0];
+    if (['superadmin', 'support'].includes(target.role) && req.userRole !== 'superadmin')
+      return res.status(403).json({ error: 'Seul le superadmin peut modifier ce compte' });
+
     const { nom, rizerie, telephone, ville, email } = req.body;
     const result = await pool.query(
       `UPDATE users SET nom=$1, email=$2, rizerie=$3, telephone=$4, ville=$5
@@ -354,7 +360,6 @@ router.put('/users/:id', async (req, res) => {
        RETURNING id, nom, email, rizerie, telephone, ville, role, suspended`,
       [nom, email || null, rizerie || null, telephone || null, ville || null, req.params.id]
     );
-    if (!result.rows.length) return res.status(404).json({ error: 'Utilisateur non trouvé' });
     await log(req.userId, req.userNom, 'PROFILE_UPDATED',
               result.rows[0], { nom, email }, req.ip);
     res.json(result.rows[0]);
@@ -370,6 +375,11 @@ router.patch('/users/:id/suspend', async (req, res) => {
     const { suspended, reason } = req.body;
     if (req.params.id === req.userId)
       return res.status(400).json({ error: 'Impossible de suspendre son propre compte' });
+
+    const targetR = await pool.query('SELECT role FROM users WHERE id=$1', [req.params.id]);
+    if (!targetR.rows.length) return res.status(404).json({ error: 'Utilisateur non trouvé' });
+    if (['superadmin', 'support'].includes(targetR.rows[0].role) && req.userRole !== 'superadmin')
+      return res.status(403).json({ error: 'Seul le superadmin peut suspendre ce compte' });
 
     const result = await pool.query(
       `UPDATE users
@@ -392,6 +402,11 @@ router.patch('/users/:id/suspend', async (req, res) => {
 // PATCH /api/admin/users/:id/password — réinitialiser le mot de passe
 router.patch('/users/:id/password', async (req, res) => {
   try {
+    const targetR = await pool.query('SELECT id, nom, email, role FROM users WHERE id=$1', [req.params.id]);
+    if (!targetR.rows.length) return res.status(404).json({ error: 'Utilisateur non trouvé' });
+    if (['superadmin', 'support'].includes(targetR.rows[0].role) && req.userRole !== 'superadmin')
+      return res.status(403).json({ error: 'Seul le superadmin peut réinitialiser ce mot de passe' });
+
     const { new_password } = req.body;
     if (!new_password || new_password.length < 12)
       return res.status(400).json({ error: 'Mot de passe : 12 caractères minimum' });
@@ -401,7 +416,6 @@ router.patch('/users/:id/password', async (req, res) => {
       `UPDATE users SET password=$1 WHERE id=$2 RETURNING id, nom, email`,
       [hash, req.params.id]
     );
-    if (!result.rows.length) return res.status(404).json({ error: 'Utilisateur non trouvé' });
     await log(req.userId, req.userNom, 'PASSWORD_RESET',
               result.rows[0], {}, req.ip);
     res.json({ message: 'Mot de passe réinitialisé avec succès' });
@@ -453,6 +467,9 @@ router.delete('/users/:id', async (req, res) => {
     );
     if (!userR.rows.length) return res.status(404).json({ error: 'Utilisateur non trouvé' });
     const target = userR.rows[0];
+
+    if (['superadmin', 'support'].includes(target.role) && req.userRole !== 'superadmin')
+      return res.status(403).json({ error: 'Seul le superadmin peut supprimer ce compte' });
 
     await withTransaction(async (client) => {
       if (target.role === 'vendeur' && target.parent_id) {
