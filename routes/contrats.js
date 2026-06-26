@@ -50,6 +50,8 @@ router.post('/clients', async (req, res) => {
       return res.status(400).json({ error: 'date_debut invalide (format YYYY-MM-DD attendu)' });
     if (date_fin && !isValidDate(date_fin))
       return res.status(400).json({ error: 'date_fin invalide (format YYYY-MM-DD attendu)' });
+    if (date_debut && date_fin && date_fin <= date_debut)
+      return res.status(400).json({ error: 'date_fin doit etre posterieure a date_debut' });
     if (!maxLen(client_nom, 200)) return res.status(400).json({ error: 'client_nom trop long (200 caracteres max)' });
     if (!maxLen(note, 2000))      return res.status(400).json({ error: 'note trop longue (2000 caracteres max)' });
 
@@ -88,6 +90,8 @@ router.put('/clients/:id', async (req, res) => {
       return res.status(400).json({ error: 'date_debut invalide (format YYYY-MM-DD attendu)' });
     if (date_fin && !isValidDate(date_fin))
       return res.status(400).json({ error: 'date_fin invalide (format YYYY-MM-DD attendu)' });
+    if (date_debut && date_fin && date_fin <= date_debut)
+      return res.status(400).json({ error: 'date_fin doit etre posterieure a date_debut' });
     if (!maxLen(client_nom, 200)) return res.status(400).json({ error: 'client_nom trop long (200 caracteres max)' });
     if (!maxLen(note, 2000))      return res.status(400).json({ error: 'note trop longue (2000 caracteres max)' });
     const ids = await getScopeIds(req.userId, req.userRole);
@@ -160,6 +164,8 @@ router.post('/paddy', async (req, res) => {
       return res.status(400).json({ error: 'date_debut invalide (format YYYY-MM-DD attendu)' });
     if (date_fin && !isValidDate(date_fin))
       return res.status(400).json({ error: 'date_fin invalide (format YYYY-MM-DD attendu)' });
+    if (date_debut && date_fin && date_fin <= date_debut)
+      return res.status(400).json({ error: 'date_fin doit etre posterieure a date_debut' });
     if (!maxLen(producteur_nom, 200)) return res.status(400).json({ error: 'producteur_nom trop long (200 caracteres max)' });
     if (!maxLen(note, 2000))          return res.status(400).json({ error: 'note trop longue (2000 caracteres max)' });
     const numero = await nextNumero('contrats_paddy', 'CP', req.userId);
@@ -189,6 +195,8 @@ router.put('/paddy/:id', async (req, res) => {
       return res.status(400).json({ error: 'date_debut invalide (format YYYY-MM-DD attendu)' });
     if (date_fin && !isValidDate(date_fin))
       return res.status(400).json({ error: 'date_fin invalide (format YYYY-MM-DD attendu)' });
+    if (date_debut && date_fin && date_fin <= date_debut)
+      return res.status(400).json({ error: 'date_fin doit etre posterieure a date_debut' });
     if (!maxLen(producteur_nom, 200)) return res.status(400).json({ error: 'producteur_nom trop long (200 caracteres max)' });
     if (!maxLen(note, 2000))          return res.status(400).json({ error: 'note trop longue (2000 caracteres max)' });
     const ids = await getScopeIds(req.userId, req.userRole);

@@ -251,10 +251,12 @@ router.delete('/:id', canManage, attachScopeIds, async (req, res) => {
       } else if (t.role === 'manager' && !['rizier','directeur','superadmin'].includes(req.userRole)) {
         throw Object.assign(new Error('Seul le rizier ou un directeur peut supprimer un manager'), { status: 403 });
       } else {
-        // Remonte managers et vendeurs directs vers le parent du supprimé
+        // Remonte les enfants directs vers le parent du supprimé.
+        // Si le supprimé n'a pas de parent (directeur sans rattachement), le requester prend la relève.
+        const newParent = t.parent_id || req.userId;
         await client.query(
           `UPDATE users SET parent_id=$1 WHERE parent_id=$2 AND role IN ('manager','vendeur','directeur')`,
-          [t.parent_id, t.id]
+          [newParent, t.id]
         );
       }
       await client.query('DELETE FROM users WHERE id=$1', [t.id]);

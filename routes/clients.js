@@ -203,8 +203,11 @@ router.put('/:id', async (req, res) => {
   try {
     const { nom, type, statut, zone, region, segment, potentiel_annuel, telephone,
             volume_estime, frequence, valorise, horaire, note, produits_interet } = req.body;
-    if (type && !TYPES_VALIDES.includes(type)) return res.status(400).json({ error: 'Type invalide' });
-    if (statut && !STATUTS_VALIDES.includes(statut)) return res.status(400).json({ error: 'Statut invalide' });
+    if (!nom)    return res.status(400).json({ error: 'Nom requis' });
+    if (!type)   return res.status(400).json({ error: 'Type requis' });
+    if (!statut) return res.status(400).json({ error: 'Statut requis' });
+    if (!TYPES_VALIDES.includes(type))     return res.status(400).json({ error: 'Type invalide' });
+    if (!STATUTS_VALIDES.includes(statut)) return res.status(400).json({ error: 'Statut invalide' });
     if (!maxLen(nom, 200))  return res.status(400).json({ error: 'nom trop long (200 caracteres max)' });
     if (!maxLen(zone, 200)) return res.status(400).json({ error: 'zone trop longue (200 caracteres max)' });
     if (!maxLen(note, 2000)) return res.status(400).json({ error: 'note trop longue (2000 caracteres max)' });

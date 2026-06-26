@@ -1,6 +1,6 @@
 const express = require('express');
 const bcrypt  = require('bcryptjs');
-const { pool } = require('../db/pool');
+const { pool, withTransaction } = require('../db/pool');
 const auth = require('../middleware/auth');
 const { isNonNegativeNumber, isValidDate, maxLen } = require('../middleware/validate');
 
@@ -125,23 +125,26 @@ router.put('/:id', async (req, res) => {
 });
 
 // DELETE /api/emplois/:id
-// Suspend le compte plateforme lié (s'il existe) avant de supprimer l'enregistrement.
+// Suspend le compte plateforme lié (s'il existe) dans la même transaction que la suppression.
 router.delete('/:id', async (req, res) => {
   try {
-    const result = await pool.query(
-      'DELETE FROM emplois WHERE id=$1 AND user_id=$2 RETURNING id, user_account_id',
-      [req.params.id, req.userId]
-    );
-    if (!result.rows.length) return res.status(404).json({ error: 'Employé non trouvé' });
-
-    if (result.rows[0].user_account_id) {
-      await pool.query(
-        `UPDATE users SET suspended=TRUE, suspended_at=NOW(), suspended_reason='Employé retiré'
-         WHERE id=$1`,
-        [result.rows[0].user_account_id]
+    const found = await withTransaction(async (client) => {
+      const result = await client.query(
+        'DELETE FROM emplois WHERE id=$1 AND user_id=$2 RETURNING id, user_account_id',
+        [req.params.id, req.userId]
       );
-    }
+      if (!result.rows.length) return false;
 
+      if (result.rows[0].user_account_id) {
+        await client.query(
+          `UPDATE users SET suspended=TRUE, suspended_at=NOW(), suspended_reason='Employé retiré'
+           WHERE id=$1`,
+          [result.rows[0].user_account_id]
+        );
+      }
+      return true;
+    });
+    if (!found) return res.status(404).json({ error: 'Employé non trouvé' });
     res.json({ message: 'Supprimé' });
   } catch (err) {
     res.status(500).json({ error: 'Erreur serveur' });
