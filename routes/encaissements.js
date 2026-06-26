@@ -1,5 +1,5 @@
 const express = require('express');
-const { pool } = require('../db/pool');
+const { pool, withTransaction } = require('../db/pool');
 const auth = require('../middleware/auth');
 const { attachScopeIds } = require('../middleware/scope');
 const { requirePerm } = require('../middleware/permissions');
@@ -113,37 +113,64 @@ router.post('/:type/:id/versements', requirePerm('encaissements:versement'), asy
     if (date && !isValidDate(date)) return res.status(400).json({ error: 'date invalide (format YYYY-MM-DD attendu)' });
 
     const ids = req.scopeIds;
+
+    // Les versements sur une vente passent par une transaction avec verrou pour éviter
+    // les race conditions (deux encaissements concurrents qui dépasseraient le montant dû).
+    if (req.params.type === 'vente') {
+      const versement = await withTransaction(async (client) => {
+        const venteR = await client.query(
+          'SELECT * FROM ventes WHERE id=$1 AND user_id = ANY($2::uuid[]) FOR UPDATE',
+          [req.params.id, ids]
+        );
+        if (!venteR.rows.length) { const e = new Error('Transaction non trouvee'); e.status = 404; throw e; }
+        const vente = venteR.rows[0];
+
+        const totalDejaR = await client.query(
+          'SELECT COALESCE(SUM(montant),0) AS total FROM versements WHERE vente_id=$1', [req.params.id]
+        );
+        const totalDeja = +totalDejaR.rows[0].total;
+        const restant   = +vente.montant - totalDeja;
+
+        if (restant <= 0) { const e = new Error('Vente deja entierement payee'); e.status = 400; throw e; }
+        if (+montant > restant) {
+          const e = new Error(`Versement excessif : montant maximum autorise est ${restant}`);
+          e.status = 400; throw e;
+        }
+
+        const result = await client.query(
+          'INSERT INTO versements (vente_id, montant, mode, date) VALUES ($1,$2,$3,$4) RETURNING *',
+          [req.params.id, +montant, mode || null, date || new Date().toISOString().slice(0, 10)]
+        );
+
+        const newTotal = totalDeja + +montant;
+        let newStatut = null;
+        if (newTotal >= +vente.montant) {
+          newStatut = 'Paye';
+        } else if (!['En cours', 'Paye'].includes(vente.statut_paiement)) {
+          newStatut = 'En cours';
+        }
+        if (newStatut) {
+          await client.query('UPDATE ventes SET statut_paiement=$1 WHERE id=$2', [newStatut, req.params.id]);
+        }
+        return result.rows[0];
+      });
+      return res.status(201).json(versement);
+    }
+
+    // Contrats : pas de cap ni de mise à jour de statut pour l'instant
     const ownsR = await pool.query(
       `SELECT * FROM ${target.table} WHERE id=$1 AND user_id = ANY($2::uuid[])`,
       [req.params.id, ids]
     );
     if (!ownsR.rows.length) return res.status(404).json({ error: 'Transaction non trouvee' });
 
-    // Cap sur-versement : le versement ne peut pas dépasser le solde restant dû
-    if (req.params.type === 'vente') {
-      const totalDejaR = await pool.query(
-        'SELECT COALESCE(SUM(montant),0) AS total FROM versements WHERE vente_id=$1', [req.params.id]
-      );
-      const totalDeja = +totalDejaR.rows[0].total;
-      const restant   = +ownsR.rows[0].montant - totalDeja;
-      if (restant <= 0) return res.status(400).json({ error: 'Vente deja entierement payee' });
-      if (+montant > restant)
-        return res.status(400).json({ error: `Versement excessif : montant maximum autorise est ${restant}` });
-    }
-
     const result = await pool.query(
       `INSERT INTO versements (${target.column}, montant, mode, date) VALUES ($1,$2,$3,$4) RETURNING *`,
       [req.params.id, +montant, mode || null, date || new Date().toISOString().slice(0, 10)]
     );
-
-    if (req.params.type === 'vente') {
-      const totalR = await pool.query('SELECT COALESCE(SUM(montant),0) AS total FROM versements WHERE vente_id=$1', [req.params.id]);
-      if (+totalR.rows[0].total >= +ownsR.rows[0].montant) {
-        await pool.query("UPDATE ventes SET statut_paiement='Paye' WHERE id=$1", [req.params.id]);
-      }
-    }
     res.status(201).json(result.rows[0]);
   } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
     console.error('POST encaissements versements:', err.message);
     res.status(500).json({ error: 'Erreur serveur' });
   }

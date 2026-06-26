@@ -1,5 +1,5 @@
 const express = require('express');
-const { pool, nextNumero } = require('../db/pool');
+const { pool, nextNumero, withTransaction } = require('../db/pool');
 const auth = require('../middleware/auth');
 const { attachScopeIds } = require('../middleware/scope');
 const { requirePerm } = require('../middleware/permissions');
@@ -9,7 +9,7 @@ const { isPositiveNumber, isNonNegativeNumber, isValidDate, maxLen } = require('
 const router = express.Router();
 router.use(auth, attachScopeIds);
 
-const STATUTS = ['Paye','En cours','En retard'];
+const STATUTS = ['Non payé','En cours','En retard','Paye'];
 const MODES   = ['Espèces','Virement','Chèque','Mobile Money'];
 
 // GET /api/ventes  (avec filtres)
@@ -112,12 +112,25 @@ router.post('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const ids = req.scopeIds;
-    const result = await pool.query(
-      'SELECT * FROM ventes WHERE id=$1 AND user_id = ANY($2::uuid[])',
-      [req.params.id, ids]
-    );
-    if (!result.rows.length) return res.status(404).json({ error: 'Vente non trouvee' });
-    res.json(result.rows[0]);
+    const [venteR, verR] = await Promise.all([
+      pool.query(
+        `SELECT v.*,
+           COALESCE(ve.total_verse, 0)  AS total_verse,
+           COALESCE(rl.nb_relances, 0)  AS nb_relances,
+           rl.derniere_relance
+         FROM ventes v
+         LEFT JOIN (SELECT vente_id, SUM(montant) AS total_verse FROM versements GROUP BY vente_id) ve ON ve.vente_id = v.id
+         LEFT JOIN (SELECT vente_id, COUNT(*) AS nb_relances, MAX(date) AS derniere_relance FROM relances GROUP BY vente_id) rl ON rl.vente_id = v.id
+         WHERE v.id=$1 AND v.user_id = ANY($2::uuid[])`,
+        [req.params.id, ids]
+      ),
+      pool.query(
+        'SELECT * FROM versements WHERE vente_id=$1 ORDER BY date DESC, created_at DESC',
+        [req.params.id]
+      ),
+    ]);
+    if (!venteR.rows.length) return res.status(404).json({ error: 'Vente non trouvee' });
+    res.json({ ...venteR.rows[0], versements: verR.rows });
   } catch (err) {
     res.status(500).json({ error: 'Erreur serveur' });
   }
@@ -209,28 +222,49 @@ router.post('/:id/versements', requirePerm('ventes:versement'), async (req, res)
     if (date && !isValidDate(date)) return res.status(400).json({ error: 'date invalide (format YYYY-MM-DD attendu)' });
 
     const ids = req.scopeIds;
-    const venteR = await pool.query('SELECT * FROM ventes WHERE id=$1 AND user_id = ANY($2::uuid[])', [req.params.id, ids]);
-    if (!venteR.rows.length) return res.status(404).json({ error: 'Vente non trouvee' });
 
-    const totalDejaR = await pool.query(
-      'SELECT COALESCE(SUM(montant),0) AS total FROM versements WHERE vente_id=$1', [req.params.id]
-    );
-    const totalDeja = +totalDejaR.rows[0].total;
-    const restant   = +venteR.rows[0].montant - totalDeja;
-    if (restant <= 0) return res.status(400).json({ error: 'Vente deja entierement payee' });
-    if (+montant > restant)
-      return res.status(400).json({ error: `Versement excessif : montant maximum autorise est ${restant}` });
+    // Transaction + SELECT FOR UPDATE : empêche deux versements concurrents de dépasser le montant dû.
+    const versement = await withTransaction(async (client) => {
+      const venteR = await client.query(
+        'SELECT * FROM ventes WHERE id=$1 AND user_id = ANY($2::uuid[]) FOR UPDATE',
+        [req.params.id, ids]
+      );
+      if (!venteR.rows.length) { const e = new Error('Vente non trouvee'); e.status = 404; throw e; }
+      const vente = venteR.rows[0];
 
-    const result = await pool.query(
-      `INSERT INTO versements (vente_id, montant, mode, date) VALUES ($1,$2,$3,$4) RETURNING *`,
-      [req.params.id, +montant, mode || null, date || new Date().toISOString().slice(0, 10)]
-    );
+      const totalDejaR = await client.query(
+        'SELECT COALESCE(SUM(montant),0) AS total FROM versements WHERE vente_id=$1', [req.params.id]
+      );
+      const totalDeja = +totalDejaR.rows[0].total;
+      const restant   = +vente.montant - totalDeja;
 
-    if (totalDeja + +montant >= +venteR.rows[0].montant) {
-      await pool.query("UPDATE ventes SET statut_paiement='Paye' WHERE id=$1", [req.params.id]);
-    }
-    res.status(201).json(result.rows[0]);
+      if (restant <= 0) { const e = new Error('Vente deja entierement payee'); e.status = 400; throw e; }
+      if (+montant > restant) {
+        const e = new Error(`Versement excessif : montant maximum autorise est ${restant}`);
+        e.status = 400; throw e;
+      }
+
+      const result = await client.query(
+        'INSERT INTO versements (vente_id, montant, mode, date) VALUES ($1,$2,$3,$4) RETURNING *',
+        [req.params.id, +montant, mode || null, date || new Date().toISOString().slice(0, 10)]
+      );
+
+      const newTotal = totalDeja + +montant;
+      let newStatut = null;
+      if (newTotal >= +vente.montant) {
+        newStatut = 'Paye';
+      } else if (!['En cours', 'Paye'].includes(vente.statut_paiement)) {
+        newStatut = 'En cours';
+      }
+      if (newStatut) {
+        await client.query('UPDATE ventes SET statut_paiement=$1 WHERE id=$2', [newStatut, req.params.id]);
+      }
+      return result.rows[0];
+    });
+
+    res.status(201).json(versement);
   } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
     console.error('POST versements:', err.message);
     res.status(500).json({ error: 'Erreur serveur' });
   }
