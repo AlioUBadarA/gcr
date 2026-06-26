@@ -176,4 +176,64 @@ router.post('/:type/:id/versements', requirePerm('encaissements:versement'), asy
   }
 });
 
+// DELETE /api/encaissements/versements/:id — annuler un versement et recalculer le statut de la vente
+// Mêmes droits que la création (encaissements:versement).
+router.delete('/versements/:id', requirePerm('encaissements:versement'), async (req, res) => {
+  try {
+    const ids = req.scopeIds;
+
+    await withTransaction(async (client) => {
+      // Récupère le versement et vérifie l'appartenance via la vente ou le contrat
+      const verR = await client.query(
+        `SELECT v.*, vt.user_id AS vente_user_id, cc.user_id AS contrat_user_id
+         FROM versements v
+         LEFT JOIN ventes            vt ON vt.id = v.vente_id
+         LEFT JOIN contrats_clients  cc ON cc.id = v.contrat_client_id
+         WHERE v.id = $1`,
+        [req.params.id]
+      );
+      if (!verR.rows.length) { const e = new Error('Versement non trouvé'); e.status = 404; throw e; }
+      const ver = verR.rows[0];
+
+      const ownerId = ver.vente_user_id || ver.contrat_user_id;
+      if (!ids.includes(ownerId) && !ids.map(String).includes(String(ownerId))) {
+        const e = new Error('Versement non trouvé'); e.status = 404; throw e;
+      }
+
+      await client.query('DELETE FROM versements WHERE id=$1', [req.params.id]);
+
+      // Recalcul du statut uniquement pour les versements liés à une vente
+      if (ver.vente_id) {
+        const venteR = await client.query(
+          'SELECT * FROM ventes WHERE id=$1 FOR UPDATE', [ver.vente_id]
+        );
+        if (venteR.rows.length) {
+          const vente = venteR.rows[0];
+          const totalR = await client.query(
+            'SELECT COALESCE(SUM(montant),0) AS total FROM versements WHERE vente_id=$1', [ver.vente_id]
+          );
+          const total = +totalR.rows[0].total;
+          let newStatut;
+          if (total >= +vente.montant) {
+            newStatut = 'Paye';
+          } else if (total > 0) {
+            newStatut = 'En cours';
+          } else {
+            newStatut = 'Non payé';
+          }
+          if (newStatut !== vente.statut_paiement) {
+            await client.query('UPDATE ventes SET statut_paiement=$1 WHERE id=$2', [newStatut, ver.vente_id]);
+          }
+        }
+      }
+    });
+
+    res.json({ message: 'Versement supprimé' });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    console.error('DELETE versements:', err.message);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
 module.exports = router;

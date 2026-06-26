@@ -18,6 +18,12 @@ const STATUTS = ['Actif','Suspendu','Terminé'];
 router.get('/clients', async (req, res) => {
   try {
     const ids = await getScopeIds(req.userId, req.userRole);
+    // Mise à jour automatique : tout contrat dont date_fin est dépassée passe à 'Terminé'
+    await pool.query(
+      `UPDATE contrats_clients SET statut='Terminé'
+       WHERE user_id = ANY($1::uuid[]) AND date_fin < CURRENT_DATE AND statut != 'Terminé'`,
+      [ids]
+    );
     const { statut } = req.query;
     let q = `SELECT cc.*, u.nom AS vendeur_nom
              FROM contrats_clients cc
@@ -133,6 +139,11 @@ router.delete('/clients/:id', async (req, res) => {
 router.get('/paddy', async (req, res) => {
   try {
     const ids = await getScopeIds(req.userId, req.userRole);
+    await pool.query(
+      `UPDATE contrats_paddy SET statut='Terminé'
+       WHERE user_id = ANY($1::uuid[]) AND date_fin < CURRENT_DATE AND statut != 'Terminé'`,
+      [ids]
+    );
     const { statut } = req.query;
     let q = `SELECT cp.*, u.nom AS vendeur_nom
              FROM contrats_paddy cp

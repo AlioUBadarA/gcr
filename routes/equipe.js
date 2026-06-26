@@ -141,28 +141,52 @@ router.put('/:id', canManage, attachScopeIds, async (req, res) => {
   }
 });
 
-// PATCH /api/equipe/:id/role — promouvoir un commercial en manager
+// PATCH /api/equipe/:id/role — promotion vendeur→manager ou rétrogradation manager→vendeur
 // Directeur, rizier ou superadmin uniquement.
 router.patch('/:id/role', attachScopeIds, async (req, res) => {
   if (!['directeur', 'rizier', 'superadmin'].includes(req.userRole))
-    return res.status(403).json({ error: 'Seul le directeur ou le rizier peut promouvoir un commercial' });
+    return res.status(403).json({ error: 'Seul le directeur ou le rizier peut modifier un rôle' });
   try {
     const { role } = req.body;
-    if (role !== 'manager')
-      return res.status(400).json({ error: 'Seule la promotion au rang de manager est supportée' });
+    if (!['manager', 'vendeur'].includes(role))
+      return res.status(400).json({ error: 'role doit etre manager ou vendeur' });
 
+    if (role === 'manager') {
+      const target = await pool.query(
+        `SELECT id FROM users WHERE id=$1 AND id = ANY($2::uuid[]) AND role='vendeur'`,
+        [req.params.id, req.scopeIds]
+      );
+      if (!target.rows.length)
+        return res.status(404).json({ error: 'Commercial non trouvé dans votre périmètre' });
+
+      const result = await pool.query(
+        `UPDATE users SET role='manager', parent_id=$1 WHERE id=$2
+         RETURNING id, nom, role, parent_id`,
+        [req.userId, req.params.id]
+      );
+      return res.json(result.rows[0]);
+    }
+
+    // Rétrogradation manager → vendeur : ses vendeurs remontent vers le requester
     const target = await pool.query(
-      `SELECT id FROM users WHERE id=$1 AND id = ANY($2::uuid[]) AND role='vendeur'`,
+      `SELECT id FROM users WHERE id=$1 AND id = ANY($2::uuid[]) AND role='manager'`,
       [req.params.id, req.scopeIds]
     );
     if (!target.rows.length)
-      return res.status(404).json({ error: 'Commercial non trouvé dans votre périmètre' });
+      return res.status(404).json({ error: 'Manager non trouvé dans votre périmètre' });
 
-    // Le nouveau manager est rattaché directement au requester (directeur/rizier)
+    await withTransaction(async (client) => {
+      await client.query(
+        `UPDATE users SET parent_id=$1 WHERE parent_id=$2 AND role='vendeur'`,
+        [req.userId, req.params.id]
+      );
+      await client.query(
+        `UPDATE users SET role='vendeur', parent_id=$1 WHERE id=$2`,
+        [req.userId, req.params.id]
+      );
+    });
     const result = await pool.query(
-      `UPDATE users SET role='manager', parent_id=$1 WHERE id=$2
-       RETURNING id, nom, role, parent_id`,
-      [req.userId, req.params.id]
+      'SELECT id, nom, role, parent_id FROM users WHERE id=$1', [req.params.id]
     );
     res.json(result.rows[0]);
   } catch (err) {

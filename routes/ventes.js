@@ -15,7 +15,7 @@ const MODES   = ['Espèces','Virement','Chèque','Mobile Money'];
 // GET /api/ventes  (avec filtres)
 router.get('/', async (req, res) => {
   try {
-    const { mois, annee, statut, client_id } = req.query;
+    const { mois, annee, statut, client_id, vendeur_id } = req.query;
     const limit  = Math.min(Math.max(0, parseInt(req.query.limit)  || 200), 500);
     const offset = Math.max(0, parseInt(req.query.offset) || 0);
     const ids = req.scopeIds;
@@ -44,6 +44,9 @@ router.get('/', async (req, res) => {
     }
     if (client_id) {
       q += ` AND v.client_id = $${params.length+1}`; params.push(client_id);
+    }
+    if (vendeur_id && req.scopeIds.includes(vendeur_id)) {
+      q += ` AND v.user_id = $${params.length+1}`; params.push(vendeur_id);
     }
     q += ` ORDER BY date_vente DESC, v.created_at DESC
            LIMIT $${params.length+1} OFFSET $${params.length+2}`;

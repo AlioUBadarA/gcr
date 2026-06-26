@@ -2,6 +2,7 @@ const express = require('express');
 const { pool } = require('../db/pool');
 const auth = require('../middleware/auth');
 const { getScopeIds } = require('../middleware/scope');
+const { findOrCreateClient } = require('./clients');
 
 const router = express.Router();
 router.use(auth);
@@ -72,13 +73,21 @@ router.put('/:id', async (req, res) => {
        req.params.id, ids]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Prospect non trouvé' });
-    res.json(result.rows[0]);
+    const prospect = result.rows[0];
+
+    let client_converti = null;
+    if (prospect.statut === 'Gagné') {
+      client_converti = await findOrCreateClient(req.userId, prospect.nom, prospect.telephone);
+    }
+
+    res.json({ ...prospect, client_converti });
   } catch (err) {
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
 
 // PATCH /api/prospection/:id/statut
+// Si statut = 'Gagné', crée ou retrouve automatiquement le client correspondant.
 router.patch('/:id/statut', async (req, res) => {
   try {
     const { statut } = req.body;
@@ -89,7 +98,14 @@ router.patch('/:id/statut', async (req, res) => {
       [statut, req.params.id, ids]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Prospect non trouvé' });
-    res.json(result.rows[0]);
+    const prospect = result.rows[0];
+
+    let client_converti = null;
+    if (statut === 'Gagné') {
+      client_converti = await findOrCreateClient(req.userId, prospect.nom, prospect.telephone);
+    }
+
+    res.json({ ...prospect, client_converti });
   } catch (err) {
     res.status(500).json({ error: 'Erreur serveur' });
   }
