@@ -4,6 +4,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const { initSchema, runMigrations } = require('./db/pool');
+const logger = require('./utils/logger');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -34,6 +35,7 @@ app.use('/api/auth', rateLimit({
 }));
 
 app.use(express.json({ limit: '1mb' }));
+app.use(logger.httpMiddleware);
 
 // ── Health check ──────────────────────────────────────────────
 app.get('/health', (req, res) => {
@@ -67,33 +69,33 @@ app.use((req, res) => {
 
 // ── Erreurs globales ──────────────────────────────────────────
 app.use((err, req, res, next) => {
-  console.error('Erreur non geree:', err.message);
+  logger.error('Erreur non geree', { err: err.message, stack: err.stack, method: req.method, path: req.path, userId: req.userId, ip: req.ip });
   res.status(500).json({ error: 'Erreur serveur interne' });
 });
 
 // ── Demarrage ─────────────────────────────────────────────────
 async function start() {
   if (!process.env.DATABASE_URL) {
-    console.error('ERREUR: DATABASE_URL manquant dans les variables d\'environnement');
+    logger.error('DATABASE_URL manquant dans les variables d\'environnement');
     process.exit(1);
   }
   if (!process.env.JWT_SECRET) {
-    console.error('ERREUR: JWT_SECRET manquant dans les variables d\'environnement');
+    logger.error('JWT_SECRET manquant dans les variables d\'environnement');
     process.exit(1);
   }
   if (process.env.NODE_ENV === 'production' && !process.env.FRONTEND_URL) {
-    console.error('ERREUR: FRONTEND_URL manquant en production - CORS "*" interdit. Configurez la variable d\'environnement.');
+    logger.error('FRONTEND_URL manquant en production - CORS "*" interdit');
     process.exit(1);
   }
   try {
     await initSchema();
     await runMigrations();
     app.listen(PORT, () => {
-      console.log(`PFS Backend demarre sur le port ${PORT}`);
-      console.log(`Health check : http://localhost:${PORT}/health`);
+      logger.info(`PFS Backend demarre`, { port: PORT, env: process.env.NODE_ENV || 'development' });
+      logger.info(`Health check disponible`, { url: `http://localhost:${PORT}/health` });
     });
   } catch (err) {
-    console.error('Echec du demarrage:', err.message);
+    logger.error('Echec du demarrage', { err: err.message, stack: err.stack });
     process.exit(1);
   }
 }

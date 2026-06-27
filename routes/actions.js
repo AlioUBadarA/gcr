@@ -1,5 +1,6 @@
 const express = require('express');
 const { pool } = require('../db/pool');
+const logger = require('../utils/logger');
 const auth = require('../middleware/auth');
 const { getScopeIds } = require('../middleware/scope');
 
@@ -123,7 +124,7 @@ router.get('/', async (req, res) => {
       },
     });
   } catch (err) {
-    console.error('GET actions:', err.message);
+    logger.error('GET actions', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -147,7 +148,7 @@ router.patch('/traiter', async (req, res) => {
     }
     res.json({ message: 'OK' });
   } catch (err) {
-    console.error('PATCH actions/traiter:', err.message);
+    logger.error('PATCH actions/traiter', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });

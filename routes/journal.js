@@ -1,5 +1,6 @@
 const express = require('express');
 const { pool } = require('../db/pool');
+const logger = require('../utils/logger');
 const auth = require('../middleware/auth');
 const { attachScopeIds } = require('../middleware/scope');
 
@@ -35,7 +36,7 @@ router.get('/', async (req, res) => {
 
     res.json({ from, to, ventes: ventesR.rows, versements: versementsR.rows });
   } catch (err) {
-    console.error('GET journal:', err.message);
+    logger.error('GET journal', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });

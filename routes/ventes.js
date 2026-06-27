@@ -1,5 +1,6 @@
 const express = require('express');
 const { pool, nextNumero, withTransaction } = require('../db/pool');
+const logger = require('../utils/logger');
 const auth = require('../middleware/auth');
 const { attachScopeIds } = require('../middleware/scope');
 const { requirePerm } = require('../middleware/permissions');
@@ -55,7 +56,7 @@ router.get('/', async (req, res) => {
     const result = await pool.query(q, params);
     res.json(result.rows);
   } catch (err) {
-    console.error('GET ventes:', err.message);
+    logger.error('GET ventes', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -106,7 +107,7 @@ router.post('/', async (req, res) => {
 
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    console.error('POST ventes:', err.message);
+    logger.error('POST ventes', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -281,7 +282,7 @@ router.post('/:id/versements', requirePerm('ventes:versement'), async (req, res)
     res.status(201).json(versement);
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message });
-    console.error('POST versements:', err.message);
+    logger.error('POST versements', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });

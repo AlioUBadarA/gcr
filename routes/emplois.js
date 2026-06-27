@@ -1,6 +1,7 @@
 const express = require('express');
 const bcrypt  = require('bcryptjs');
 const { pool, withTransaction } = require('../db/pool');
+const logger  = require('../utils/logger');
 const auth = require('../middleware/auth');
 const { isNonNegativeNumber, isValidDate, maxLen } = require('../middleware/validate');
 
@@ -22,7 +23,7 @@ router.get('/', async (req, res) => {
     );
     res.json(result.rows);
   } catch (err) {
-    console.error('GET emplois:', err.message);
+    logger.error('GET emplois', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -114,7 +115,7 @@ router.post('/', async (req, res) => {
     });
     res.status(201).json(emploi);
   } catch (err) {
-    console.error('POST emplois:', err.message);
+    logger.error('POST emplois', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });

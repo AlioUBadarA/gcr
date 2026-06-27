@@ -1,4 +1,5 @@
 const { Pool } = require('pg');
+const logger = require('../utils/logger');
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -11,7 +12,7 @@ const pool = new Pool({
 });
 
 pool.on('error', (err) => {
-  console.error('Erreur pool PostgreSQL:', err.message);
+  logger.error('Erreur pool PostgreSQL', { err: err.message, stack: err.stack });
 });
 
 // Initialise le schema au demarrage
@@ -21,16 +22,16 @@ async function initSchema() {
   const sql = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
   try {
     await pool.query(sql);
-    console.log('Schema PostgreSQL initialise');
+    logger.info('Schema PostgreSQL initialise');
   } catch (err) {
-    console.error('Erreur initialisation schema:', err.message);
+    logger.error('Erreur initialisation schema', { err: err.message, stack: err.stack });
     throw err;
   }
 }
 
 // Migrations — idempotentes, sans risque
 async function runMigrations() {
-  console.log('[MIG] Debut runMigrations...');
+  logger.info('[MIG] Debut runMigrations');
   const migrations = [
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'rizier' CHECK (role IN ('rizier','superadmin'))`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS suspended BOOLEAN NOT NULL DEFAULT FALSE`,
@@ -336,27 +337,27 @@ async function runMigrations() {
   for (let i = 0; i < migrations.length; i++) {
     try {
       await pool.query(migrations[i]);
-      console.log(`[MIG] Step ${i + 1}/${migrations.length} OK`);
+      logger.info(`[MIG] Step ${i + 1}/${migrations.length} OK`);
     } catch (err) {
-      console.error(`[MIG] Step ${i + 1} error:`, err.message);
+      logger.error(`[MIG] Step ${i + 1} error`, { err: err.message, stack: err.stack });
     }
   }
-  console.log('[MIG] Migrations appliquees');
+  logger.info('[MIG] Migrations appliquees');
 
   // ── Compte superadmin garanti ──────────────────────────────────
   const email    = process.env.SUPERADMIN_EMAIL?.toLowerCase().trim();
   const password = process.env.SUPERADMIN_PASSWORD?.trim();
   const nom      = process.env.SUPERADMIN_NOM?.trim() || 'Super Admin PFS';
 
-  console.log(`[MIG] SUPERADMIN_EMAIL: ${email || 'NON DEFINI'}`);
-  console.log(`[MIG] SUPERADMIN_PASSWORD: ${password ? '***set***' : 'NON DEFINI'}`);
+  logger.info(`[MIG] SUPERADMIN_EMAIL: ${email || 'NON DEFINI'}`);
+  logger.info(`[MIG] SUPERADMIN_PASSWORD: ${password ? '***set***' : 'NON DEFINI'}`);
 
   if (email && password) {
     try {
       const bcrypt = require('bcryptjs');
-      console.log('[MIG] Hachage du mot de passe...');
+      logger.info('[MIG] Hachage du mot de passe...');
       const hash = await bcrypt.hash(password, 12);
-      console.log('[MIG] Hash OK, upsert en cours...');
+      logger.info('[MIG] Hash OK, upsert en cours...');
 
       await pool.query(`
         INSERT INTO users (nom, email, password, rizerie, role)
@@ -367,12 +368,12 @@ async function runMigrations() {
               suspended = FALSE
       `, [nom, email, hash]);
 
-      console.log(`[MIG] Superadmin OK : ${email}`);
+      logger.info(`[MIG] Superadmin OK`, { email });
     } catch (err) {
-      console.error('[MIG] Erreur creation superadmin:', err.message);
+      logger.error('[MIG] Erreur creation superadmin', { err: err.message, stack: err.stack });
     }
   } else {
-    console.log('[MIG] Pas de superadmin a creer (variables manquantes)');
+    logger.warn('[MIG] Pas de superadmin a creer (variables manquantes)');
   }
 }
 

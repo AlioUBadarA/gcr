@@ -1,5 +1,6 @@
 const express = require('express');
 const { pool } = require('../db/pool');
+const logger = require('../utils/logger');
 const auth = require('../middleware/auth');
 const { attachScopeIds } = require('../middleware/scope');
 
@@ -41,7 +42,7 @@ router.post('/', async (req, res) => {
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    console.error('POST activites:', err.message);
+    logger.error('POST activites', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });

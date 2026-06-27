@@ -1,5 +1,6 @@
 const express = require('express');
 const { pool } = require('../db/pool');
+const logger = require('../utils/logger');
 const auth = require('../middleware/auth');
 
 const router = express.Router();
@@ -52,7 +53,7 @@ router.post('/', canWrite, async (req, res) => {
     res.status(201).json(result.rows[0]);
   } catch (err) {
     if (err.code === '23505') return res.status(409).json({ error: 'Référence déjà utilisée dans cette rizerie' });
-    console.error('POST produits:', err.message);
+    logger.error('POST produits', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });

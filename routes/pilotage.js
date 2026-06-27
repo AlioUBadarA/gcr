@@ -1,5 +1,6 @@
 const express = require('express');
 const { pool } = require('../db/pool');
+const logger = require('../utils/logger');
 const auth = require('../middleware/auth');
 const { attachScopeIds } = require('../middleware/scope');
 const { requirePerm } = require('../middleware/permissions');
@@ -28,7 +29,7 @@ router.get('/equipe/:semaine', attachScopeIds, async (req, res) => {
     );
     res.json(result.rows);
   } catch (err) {
-    console.error('GET pilotage equipe:', err.message);
+    logger.error('GET pilotage equipe', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -53,7 +54,7 @@ router.get('/:semaine', async (req, res) => {
     });
     res.json(data);
   } catch (err) {
-    console.error('GET pilotage:', err.message);
+    logger.error('GET pilotage', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -90,7 +91,7 @@ router.put('/:semaine', async (req, res) => {
     res.json(saved);
   } catch (err) {
     await client.query('ROLLBACK');
-    console.error('PUT pilotage:', err.message);
+    logger.error('PUT pilotage', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   } finally {
     client.release();
@@ -118,7 +119,7 @@ router.get('/:semaine/visites', async (req, res) => {
     );
     res.json(result.rows);
   } catch (err) {
-    console.error('GET pilotage visites:', err.message);
+    logger.error('GET pilotage visites', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -146,7 +147,7 @@ router.post('/:semaine/visites', attachScopeIds, async (req, res) => {
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    console.error('POST pilotage visites:', err.message);
+    logger.error('POST pilotage visites', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });

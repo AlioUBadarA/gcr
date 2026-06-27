@@ -1,5 +1,6 @@
 const express = require('express');
 const { pool } = require('../db/pool');
+const logger = require('../utils/logger');
 const auth = require('../middleware/auth');
 const { getScopeIds } = require('../middleware/scope');
 const { isNonNegativeNumber } = require('../middleware/validate');
@@ -86,7 +87,7 @@ router.get('/', async (req, res) => {
 
     res.json({ annee, months, par_vendeur, quarterly });
   } catch (err) {
-    console.error('GET forecast:', err.message);
+    logger.error('GET forecast', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -116,7 +117,7 @@ router.post('/', async (req, res) => {
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    console.error('POST forecast:', err.message);
+    logger.error('POST forecast', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });

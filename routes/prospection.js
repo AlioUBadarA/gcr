@@ -1,5 +1,6 @@
 const express = require('express');
 const { pool } = require('../db/pool');
+const logger = require('../utils/logger');
 const auth = require('../middleware/auth');
 const { getScopeIds } = require('../middleware/scope');
 const { findOrCreateClient } = require('./clients');
@@ -27,7 +28,7 @@ router.get('/', async (req, res) => {
     const result = await pool.query(q, params);
     res.json(result.rows);
   } catch (err) {
-    console.error('GET prospection:', err.message);
+    logger.error('GET prospection', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -49,7 +50,7 @@ router.post('/', async (req, res) => {
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    console.error('POST prospection:', err.message);
+    logger.error('POST prospection', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });

@@ -1,6 +1,7 @@
 const express = require('express');
 const bcrypt  = require('bcryptjs');
 const { pool, withTransaction, reassignVendeurData } = require('../db/pool');
+const logger  = require('../utils/logger');
 const auth    = require('../middleware/auth');
 const { attachScopeIds } = require('../middleware/scope');
 
@@ -64,7 +65,7 @@ router.get('/', canManage, attachScopeIds, async (req, res) => {
 
     res.json(result);
   } catch (err) {
-    console.error('GET equipe:', err.message);
+    logger.error('GET equipe', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -119,7 +120,7 @@ router.post('/', canManage, async (req, res) => {
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    console.error('POST equipe:', err.message);
+    logger.error('POST equipe', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -197,7 +198,7 @@ router.patch('/:id/role', attachScopeIds, async (req, res) => {
     );
     res.json(result.rows[0]);
   } catch (err) {
-    console.error('PATCH equipe role:', err.message);
+    logger.error('PATCH equipe role', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -236,7 +237,7 @@ router.patch('/:id/manager', attachScopeIds, async (req, res) => {
     );
     res.json({ ...result.rows[0], manager_nom: managerR.rows[0].nom });
   } catch (err) {
-    console.error('PATCH equipe manager:', err.message);
+    logger.error('PATCH equipe manager', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -297,7 +298,7 @@ router.delete('/:id', canManage, attachScopeIds, async (req, res) => {
     res.json({ message: 'Compte supprimé' });
   } catch (err) {
     if (err.status === 403) return res.status(403).json({ error: err.message });
-    console.error('DELETE equipe:', err.message);
+    logger.error('DELETE equipe', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });

@@ -1,5 +1,6 @@
 const express = require('express');
 const { pool, withTransaction } = require('../db/pool');
+const logger = require('../utils/logger');
 const auth = require('../middleware/auth');
 const { attachScopeIds } = require('../middleware/scope');
 const { requirePerm } = require('../middleware/permissions');
@@ -47,7 +48,7 @@ router.get('/search', async (req, res) => {
     ];
     res.json(results);
   } catch (err) {
-    console.error('GET encaissements/search:', err.message);
+    logger.error('GET encaissements/search', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -68,7 +69,7 @@ router.get('/mois', async (req, res) => {
     );
     res.json({ total: Number(result.rows[0].total) });
   } catch (err) {
-    console.error('GET encaissements/mois:', err.message);
+    logger.error('GET encaissements/mois', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -99,7 +100,7 @@ router.get('/:type/:id/versements', async (req, res) => {
     );
     res.json(result.rows);
   } catch (err) {
-    console.error('GET encaissements versements:', err.message);
+    logger.error('GET encaissements versements', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -173,7 +174,7 @@ router.post('/:type/:id/versements', requirePerm('encaissements:versement'), asy
     res.status(201).json(result.rows[0]);
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message });
-    console.error('POST encaissements versements:', err.message);
+    logger.error('POST encaissements versements', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -235,7 +236,7 @@ router.delete('/versements/:id', requirePerm('encaissements:versement'), async (
     res.json({ message: 'Versement supprimé' });
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message });
-    console.error('DELETE versements:', err.message);
+    logger.error('DELETE versements', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });

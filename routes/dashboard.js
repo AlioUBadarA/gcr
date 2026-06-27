@@ -1,5 +1,6 @@
 const express = require('express');
 const { pool } = require('../db/pool');
+const logger = require('../utils/logger');
 const auth = require('../middleware/auth');
 const { getScopeIds } = require('../middleware/scope');
 
@@ -217,7 +218,7 @@ router.get('/', async (req, res) => {
       },
     });
   } catch (err) {
-    console.error('GET dashboard:', err.message);
+    logger.error('GET dashboard', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });

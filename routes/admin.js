@@ -2,6 +2,7 @@ const express = require('express');
 const bcrypt  = require('bcryptjs');
 const jwt     = require('jsonwebtoken');
 const { pool, withTransaction, reassignVendeurData } = require('../db/pool');
+const logger  = require('../utils/logger');
 const { isValidUUID } = require('../middleware/validate');
 const auth    = require('../middleware/auth');
 const isAdmin = require('../middleware/isAdmin');
@@ -20,7 +21,7 @@ async function log(actorId, actorNom, action, target, detail, ip) {
        detail ? JSON.stringify(detail) : null, ip || null]
     );
   } catch (e) {
-    console.error('audit log error:', e.message);
+    logger.error('audit log error', { err: e.message, stack: e.stack });
   }
 }
 
@@ -49,7 +50,7 @@ router.get('/stats', async (req, res) => {
       comptes_suspendus: Number(suspendedR.rows[0].count),
     });
   } catch (err) {
-    console.error('admin stats:', err.message);
+    logger.error('admin stats', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -89,7 +90,7 @@ router.get('/rizeries', async (req, res) => {
     `);
     res.json(result.rows);
   } catch (err) {
-    console.error('GET rizeries:', err.message);
+    logger.error('GET rizeries', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -110,7 +111,7 @@ router.post('/rizeries', async (req, res) => {
     await log(req.userId, req.userNom, 'RIZERIE_CREATED', result.rows[0], {}, req.ip);
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    console.error('POST rizeries:', err.message);
+    logger.error('POST rizeries', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -176,7 +177,7 @@ router.get('/users', async (req, res) => {
     `);
     res.json(result.rows);
   } catch (err) {
-    console.error('admin users list:', err.message);
+    logger.error('admin users list', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -235,7 +236,7 @@ router.get('/users/:id', async (req, res) => {
       vendeurs:  vendeursR.rows,
     });
   } catch (err) {
-    console.error('admin user detail:', err.message);
+    logger.error('admin user detail', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -300,7 +301,7 @@ async function createMembreHandler(req, res) {
               result.rows[0], { rizier: rizier.nom, email }, req.ip);
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    console.error('admin create membre:', err.message);
+    logger.error('admin create membre', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 }
@@ -340,7 +341,7 @@ router.post('/users', async (req, res) => {
               result.rows[0], { email }, req.ip);
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    console.error('admin create user:', err.message);
+    logger.error('admin create user', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -365,7 +366,7 @@ router.put('/users/:id', async (req, res) => {
               result.rows[0], { nom, email }, req.ip);
     res.json(result.rows[0]);
   } catch (err) {
-    console.error('admin update user:', err.message);
+    logger.error('admin update user', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -396,7 +397,7 @@ router.patch('/users/:id/suspend', async (req, res) => {
               result.rows[0], { reason }, req.ip);
     res.json(result.rows[0]);
   } catch (err) {
-    console.error('admin suspend:', err.message);
+    logger.error('admin suspend', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -422,7 +423,7 @@ router.patch('/users/:id/password', async (req, res) => {
               result.rows[0], {}, req.ip);
     res.json({ message: 'Mot de passe réinitialisé avec succès' });
   } catch (err) {
-    console.error('admin reset password:', err.message);
+    logger.error('admin reset password', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -453,7 +454,7 @@ router.post('/users/:id/impersonate', async (req, res) => {
       impersonatedBy: { id: req.userId, nom: req.userNom }
     });
   } catch (err) {
-    console.error('admin impersonate:', err.message);
+    logger.error('admin impersonate', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -485,7 +486,7 @@ router.delete('/users/:id', async (req, res) => {
     await log(req.userId, req.userNom, 'ACCOUNT_DELETED', target, { email: target.email }, req.ip);
     res.json({ message: 'Compte supprimé définitivement' });
   } catch (err) {
-    console.error('admin delete user:', err.message);
+    logger.error('admin delete user', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -503,7 +504,7 @@ router.get('/support', async (req, res) => {
     );
     res.json(result.rows);
   } catch (err) {
-    console.error('GET support:', err.message);
+    logger.error('GET support', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -530,7 +531,7 @@ router.post('/support', requireSuperadmin, async (req, res) => {
     await log(req.userId, req.userNom, 'SUPPORT_CREATED', result.rows[0], { email }, req.ip);
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    console.error('POST support:', err.message);
+    logger.error('POST support', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -570,7 +571,7 @@ router.put('/support/:id', requireSuperadmin, async (req, res) => {
     await log(req.userId, req.userNom, 'SUPPORT_UPDATED', result.rows[0], { email }, req.ip);
     res.json(result.rows[0]);
   } catch (err) {
-    console.error('PUT support:', err.message);
+    logger.error('PUT support', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -589,7 +590,7 @@ router.delete('/support/:id', requireSuperadmin, async (req, res) => {
     await log(req.userId, req.userNom, 'SUPPORT_DELETED', result.rows[0], { email: result.rows[0].email }, req.ip);
     res.json({ message: 'Compte support supprimé' });
   } catch (err) {
-    console.error('DELETE support:', err.message);
+    logger.error('DELETE support', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -607,7 +608,7 @@ router.get('/superadmins', requireSuperadmin, async (req, res) => {
     );
     res.json(result.rows);
   } catch (err) {
-    console.error('GET superadmins:', err.message);
+    logger.error('GET superadmins', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -634,7 +635,7 @@ router.post('/superadmins', requireSuperadmin, async (req, res) => {
     await log(req.userId, req.userNom, 'SUPERADMIN_CREATED', result.rows[0], { email }, req.ip);
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    console.error('POST superadmins:', err.message);
+    logger.error('POST superadmins', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -674,7 +675,7 @@ router.put('/superadmins/:id', requireSuperadmin, async (req, res) => {
     await log(req.userId, req.userNom, 'SUPERADMIN_UPDATED', result.rows[0], { email }, req.ip);
     res.json(result.rows[0]);
   } catch (err) {
-    console.error('PUT superadmins:', err.message);
+    logger.error('PUT superadmins', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -697,7 +698,7 @@ router.delete('/superadmins/:id', requireSuperadmin, async (req, res) => {
     await log(req.userId, req.userNom, 'SUPERADMIN_DELETED', result.rows[0], { email: result.rows[0].email }, req.ip);
     res.json({ message: 'Compte superadmin supprimé' });
   } catch (err) {
-    console.error('DELETE superadmins:', err.message);
+    logger.error('DELETE superadmins', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -726,7 +727,7 @@ router.get('/comptes', async (req, res) => {
     `);
     res.json(result.rows);
   } catch (err) {
-    console.error('GET comptes:', err.message);
+    logger.error('GET comptes', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -859,7 +860,7 @@ router.get('/export', async (req, res) => {
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.send('﻿' + csv); // BOM UTF-8 pour Excel
   } catch (err) {
-    console.error('GET export:', err.message);
+    logger.error('GET export', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -891,7 +892,7 @@ router.get('/audit', async (req, res) => {
     ]);
     res.json({ logs: logsR.rows, total: Number(countR.rows[0].count) });
   } catch (err) {
-    console.error('admin audit:', err.message);
+    logger.error('admin audit', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -1008,7 +1009,7 @@ router.get('/performance', async (req, res) => {
       })),
     });
   } catch (err) {
-    console.error('admin performance:', err.message);
+    logger.error('admin performance', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });

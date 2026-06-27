@@ -1,5 +1,6 @@
 const express = require('express');
 const { pool, nextNumero } = require('../db/pool');
+const logger = require('../utils/logger');
 const auth = require('../middleware/auth');
 const { getScopeIds } = require('../middleware/scope');
 const { findOrCreateClient } = require('./clients');
@@ -41,7 +42,7 @@ router.get('/clients', async (req, res) => {
     const result = await pool.query(q, params);
     res.json(result.rows);
   } catch (err) {
-    console.error('GET contrats/clients:', err.message);
+    logger.error('GET contrats/clients', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -81,7 +82,7 @@ router.post('/clients', async (req, res) => {
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    console.error('POST contrats/clients:', err.message);
+    logger.error('POST contrats/clients', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -137,7 +138,7 @@ router.get('/clients/:id', async (req, res) => {
     if (!result.rows.length) return res.status(404).json({ error: 'Contrat non trouvé' });
     res.json(result.rows[0]);
   } catch (err) {
-    console.error('GET contrats/clients/:id:', err.message);
+    logger.error('GET contrats/clients/:id', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -183,7 +184,7 @@ router.get('/paddy', async (req, res) => {
     const result = await pool.query(q, params);
     res.json(result.rows);
   } catch (err) {
-    console.error('GET contrats/paddy:', err.message);
+    logger.error('GET contrats/paddy', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -215,7 +216,7 @@ router.post('/paddy', async (req, res) => {
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    console.error('POST contrats/paddy:', err.message);
+    logger.error('POST contrats/paddy', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });

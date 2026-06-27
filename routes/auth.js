@@ -2,6 +2,7 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { pool } = require('../db/pool');
+const logger = require('../utils/logger');
 
 const router = express.Router();
 
@@ -47,6 +48,7 @@ router.post('/login', async (req, res) => {
     // Réponse générique pour ne pas révéler si l'email existe
     if (!result.rows.length) {
       await secLog('LOGIN_UNKNOWN_EMAIL', null, null, { email: email.toLowerCase().trim() }, req.ip);
+      logger.warn('LOGIN_UNKNOWN_EMAIL', { email: email.toLowerCase().trim(), ip: req.ip });
       return res.status(401).json({ error: 'Email ou mot de passe incorrect' });
     }
 
@@ -57,13 +59,16 @@ router.post('/login', async (req, res) => {
       const secondes = Math.ceil((new Date(user.locked_until) - new Date()) / 1000);
       const minutes  = Math.ceil(secondes / 60);
       await secLog('LOGIN_BLOCKED_LOCKOUT', user.id, user.nom, { email: user.email }, req.ip);
+      logger.warn('LOGIN_BLOCKED_LOCKOUT', { userId: user.id, email: user.email, role: user.role, locked_minutes_restants: minutes, ip: req.ip });
       return res.status(429).json({
         error: `Trop de tentatives. Compte bloqué pour encore ${minutes} minute${minutes > 1 ? 's' : ''}.`
       });
     }
 
-    if (user.suspended)
+    if (user.suspended) {
+      logger.warn('LOGIN_SUSPENDED', { userId: user.id, email: user.email, role: user.role, reason: user.suspended_reason || null, ip: req.ip });
       return res.status(403).json({ error: `Compte suspendu${user.suspended_reason ? ' : ' + user.suspended_reason : ''}` });
+    }
 
     const valid = await bcrypt.compare(password, user.password);
 
@@ -80,12 +85,14 @@ router.post('/login', async (req, res) => {
       if (newAttempts >= MAX_ATTEMPTS) {
         await secLog('LOGIN_ACCOUNT_LOCKED', user.id, user.nom,
           { email: user.email, attempts: newAttempts, locked_until: lockUntil }, req.ip);
+        logger.warn('LOGIN_ACCOUNT_LOCKED', { userId: user.id, email: user.email, role: user.role, attempts: newAttempts, locked_until: lockUntil, ip: req.ip });
         return res.status(429).json({
           error: `Trop de tentatives. Compte bloqué pour ${LOCK_MINUTES} minutes.`
         });
       }
       await secLog('LOGIN_FAILED', user.id, user.nom,
         { email: user.email, attempts: newAttempts }, req.ip);
+      logger.warn('LOGIN_FAILED', { userId: user.id, email: user.email, role: user.role, attempts: newAttempts, max: MAX_ATTEMPTS, ip: req.ip });
       return res.status(401).json({ error: 'Email ou mot de passe incorrect' });
     }
 
@@ -95,6 +102,7 @@ router.post('/login', async (req, res) => {
       [user.id]
     );
     await secLog('LOGIN_SUCCESS', user.id, user.nom, { email: user.email, role: user.role }, req.ip);
+    logger.info('LOGIN_SUCCESS', { userId: user.id, email: user.email, role: user.role, ip: req.ip });
 
     const token = jwt.sign(
       { userId: user.id, nom: user.nom, role: user.role },
@@ -104,7 +112,7 @@ router.post('/login', async (req, res) => {
 
     res.json({ token, user: { id: user.id, nom: user.nom, email: user.email, rizerie: user.rizerie, telephone: user.telephone, ville: user.ville, role: user.role, pays: user.pays || null } });
   } catch (err) {
-    console.error('login:', err.message);
+    logger.error('login', { err: err.message, stack: err.stack, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
