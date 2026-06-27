@@ -226,3 +226,96 @@ A completer a la fin de chaque session : date, branche, ce qui est fait, ce qui 
 - Fait : Dependabot hebdo (backend + frontend). CI npm audit sur push/PR. Logs securite persistants dans audit_logs (LOGIN_FAILED, LOGIN_ACCOUNT_LOCKED, LOGIN_BLOCKED_LOCKOUT, LOGIN_SUCCESS, LOGIN_UNKNOWN_EMAIL). .env.example enrichi (commentaires securite, note rotation JWT, SUPERADMIN_*). Revue OWASP Top 10 complete. Rapport conformite + note CDP Senegal. Vulnerabilites Vite documentees (devDeps uniquement, non exploitables en prod).
 - Reste : MFA TOTP, sauvegardes, moindre privilege DB, alertes temps-reel, declaration CDP — tous hors perimetre (decisions operationnelles ou features distinctes).
 - Tests : tests/session5_security.sh — BASE_URL=http://localhost:3000 bash tests/session5_security.sh
+
+---
+
+## Sessions fonctionnelles — Correction des bugs metier et fonctionnalites manquantes
+
+Ces sessions sont intervenues apres les 5 sessions securite. Elles couvrent la correction des bugs fonctionnels identifies lors de l audit post-securite, ainsi que l ajout des fonctionnalites manquantes.
+
+---
+
+### Session fonctionnelle 1 — Bugs Groupe A/B/C
+
+- Date : 2026-06-26
+- Branche : fix/fonctionnel-1
+
+#### Groupe A — Race conditions sur les versements
+
+| # | Fichier | Probleme | Correction |
+|---|---------|----------|------------|
+| A1 | routes/ventes.js | POST versements sans transaction : deux appels concurrents pouvaient depasser le montant total | Enrobage `withTransaction` + `SELECT FOR UPDATE` sur la vente avant calcul et insertion |
+| A2 | routes/encaissements.js | Meme race condition sur la voie encaissements (ventes + contrats clients) | Meme correction : `withTransaction` + `FOR UPDATE` |
+| A3 | routes/ventes.js | Import manquant de `withTransaction` | Ajout `const { pool, nextNumero, withTransaction } = require('../db/pool')` |
+
+#### Groupe B — Dashboard et rentabilite
+
+| # | Fichier | Probleme | Correction |
+|---|---------|----------|------------|
+| B1 | routes/dashboard.js | Versements du tableau de bord ne comptabilisaient que les ventes, pas les contrats clients | Requete versements etendue : `LEFT JOIN contrats_clients cc ON cc.id = ver.contrat_client_id` |
+| B2 | routes/dashboard.js | top_clients regroupe par nom de texte : un client avec deux noms distincts apparaissait deux fois | GROUP BY sur `v.client_id` + `COALESCE(c.nom, v.client_nom)` |
+| B3 | routes/rentabilite.js | JOIN produits cassé : ne matchait pas le bon perimetre rizerie | Correction JOIN : `LEFT JOIN produits p ON p.rizerie_id = (SELECT rizerie_id FROM users WHERE id=$3) AND p.nom = v.produit` |
+| B4 | routes/actions.js | Cle d alerte calculee sur le texte du message (incluant un comptage de jours) : instable d un jour a l autre, alertes jamais marquees comme traitees | Cle stabilisee sur `entity_id` (UUID de l entite) : `cat|owner|entity_id` |
+
+#### Groupe C — Pilotage et modifications partielles
+
+| # | Fichier | Probleme | Correction |
+|---|---------|----------|------------|
+| C1 | routes/pilotage.js | PUT /visites/:id ecrasait le commentaire avec NULL si non fourni dans le body | CASE WHEN + COALESCE : `SET commentaire = CASE WHEN $1::boolean THEN $2 ELSE commentaire END, jour = COALESCE($3, jour)` |
+| C2 | routes/pilotage.js | GET /equipe/:semaine absent : managers et directeurs ne pouvaient pas voir le planning de leur equipe | Endpoint ajoute avant GET /:semaine (ordre critique pour eviter conflit de route Express) |
+
+#### Bugs supplementaires traites dans cette session
+
+| # | Fichier | Probleme | Correction |
+|---|---------|----------|------------|
+| D1 | routes/emplois.js | DELETE emploi et suspension du compte utilisateur non atomiques : si la mise a jour `users.suspended` echouait apres le DELETE, la fiche etait supprimee mais le compte restait actif | Enrobage `withTransaction` sur DELETE emplois + UPDATE users |
+| D2 | routes/equipe.js | DELETE manager laissait ses vendeurs orphelins (parent_id NULL) si lui-meme n avait pas de parent | Fallback : `newParent = t.parent_id || req.userId` avant re-parentage |
+| D3 | routes/contrats.js | Aucune validation que date_fin > date_debut sur les 4 routes POST/PUT (clients + paddy) | Validation ajoutee : `if (date_fin <= date_debut) return 400` |
+| D4 | routes/clients.js | findOrCreateClient recherche par nom ignorait la casse de facon incomplete | Correction : `LOWER(nom) = LOWER($2)` systematiquement |
+| D5 | routes/clients.js | can_delete exposait la possibilite de supprimer a des roles non autorises | Restriction : `['directeur', 'rizier', 'superadmin', 'support']` uniquement |
+| D6 | routes/clients.js | PUT sans validation : nom, type, statut pouvaient etre ecrases avec NULL | Validation ajoutee : `if (!nom) 400`, `if (!type) 400`, `if (!statut) 400` |
+| D7 | routes/prospection.js | POST/PUT sans validation statut et priorite | Validation ajoutee avec listes STATUTS et PRIORITES |
+
+---
+
+### Session fonctionnelle 2 — Fonctionnalites manquantes
+
+- Date : 2026-06-26
+- Branche : fix/fonctionnel-2
+
+| # | Ref | Fichier | Fonctionnalite ajoutee |
+|---|-----|---------|------------------------|
+| F1 | Conversion prospect | routes/prospection.js | PATCH /statut et PUT : si `statut = 'Gagné'`, appel automatique de `findOrCreateClient` — le prospect devient un client dans la base sans doublon par telephone ou nom |
+| F2 | DELETE versement | routes/encaissements.js | DELETE /versements/:id : annulation d un versement avec verification ownership + recalcul automatique du statut de paiement de la vente (Non paye / En cours / Paye) |
+| F3 | Filtre vendeur | routes/ventes.js | GET / : parametre `vendeur_id` accepte, verifie contre scopeIds pour eviter tout IDOR |
+| F4 | Retrogradation | routes/equipe.js | PATCH /:id/role : demotion manager→vendeur avec re-parentage des vendeurs subordonnes vers req.userId dans une transaction atomique |
+| F5 | Contrats auto-Termine | routes/contrats.js | GET /clients et GET /paddy : UPDATE statut='Terminé' execute automatiquement avant SELECT pour clore les contrats dont date_fin est depassee |
+| F6 | Vue pilotage equipe | routes/pilotage.js | GET /equipe/:semaine : retourne les entrees pilotage de toute l equipe, ordonnees par vendeur puis par jour de la semaine |
+| F7 | Versements paddy | db/pool.js + routes/encaissements.js | Migration : colonne `contrat_paddy_id` ajoutee a la table `versements` + contrainte CHECK `num_nonnulls(vente_id, contrat_client_id, contrat_paddy_id) = 1`. `targetTable()` etendue pour le type 'paddy'. GET /mois inclut les versements paddy |
+| F8 | GET contrat/:id | routes/contrats.js | GET /clients/:id et GET /paddy/:id ajoutes avec `total_verse` calcule via sous-requete |
+| F9 | GET emploi/:id | routes/emplois.js | GET /:id ajoute avec jointure sur `users` pour exposer `compte_email` et `compte_suspendu` |
+| F10 | DELETE forecast | routes/forecast.js | DELETE /:id ajoute, filtre sur `user_id` (ownership) |
+
+---
+
+### Session fonctionnelle 3 — Correction des 12 failles critiques post-audit
+
+- Date : 2026-06-27
+- Branche : fix/fonctionnel-2 (commit e859780)
+
+Un audit complet apres les sessions F1–F10 a identifie 12 failles critiques. Toutes ont ete corrigees dans cette session.
+
+| # | Severite | Fichier | Vulnerabilite | Correction |
+|---|----------|---------|---------------|------------|
+| C01 | Moyenne | routes/auth.js | PUT /me : `nom` pouvait etre ecrase avec NULL ou chaine vide sans retour d erreur | `if (!nom || !nom.trim()) return 400` avant UPDATE |
+| C02 | Haute | routes/ventes.js | PUT /:id : champs obligatoires (client_nom, date_vente, produit, quantite, prix_unitaire) non valides → ecrasement NULL silencieux | Validation explicite des 5 champs avant UPDATE |
+| C03 | Haute | routes/ventes.js | PUT /:id : `client_id` fourni mais non verifie dans le perimetre rizerie de l utilisateur → IDOR possible sur les clients | SELECT clients WHERE id=client_id AND rizerie_id=rizerie_user avant mise a jour |
+| C04 | Haute | routes/encaissements.js | DELETE /versements/:id : la verification d ownership ne couvrait pas les versements lies a un contrat paddy (`contrat_paddy_id`) | JOIN `contrats_paddy` ajoute + `paddy_user_id` integre dans la verification ownership |
+| C05 | Haute | routes/contrats.js | DELETE /clients/:id et /paddy/:id : aucune restriction de role → tout vendeur pouvait supprimer un contrat | `requirePerm('ventes:delete')` applique (manager+ uniquement) |
+| C06 | Haute | routes/contrats.js | PUT /clients/:id et /paddy/:id : aucune restriction → un vendeur pouvait modifier le contrat d un collegue | `requirePerm('ventes:statut')` applique (manager+ uniquement) |
+| C07 | Critique | routes/emplois.js | POST : creation du compte plateforme (INSERT users) hors transaction — si INSERT emplois echouait ensuite, un compte utilisateur orphelin etait cree en base | Creation compte + fiche emploi encapsulees dans `withTransaction` atomique |
+| C08 | Moyenne | routes/equipe.js | PUT /:id : violation de contrainte UNIQUE sur email retournait 500 non informatif au lieu de 409 | Verification duplicata email (SELECT ... WHERE email=$1 AND id != $2) avant UPDATE → 409 si doublon |
+| C09 | Moyenne | routes/equipe.js | PATCH /:id/role (promotion vendeur→manager) : les vendeurs deja subordonnes au vendeur promu n etaient pas re-parentes | Re-parentage des vendeurs subordonnes vers req.userId dans la transaction de promotion |
+| C10 | Moyenne | routes/pilotage.js | Parametre `:semaine` non valide (injection SQL improbable mais comportement indefini) | Regex `SEMAINE_RE = /^\d{4}-W(0[1-9]|[1-4]\d|5[0-3])$/` appliquee sur toutes les routes `:semaine` (GET, PUT, GET equipe) |
+| C11 | Haute | routes/prospection.js | PUT /:id : `statut || 'Nouveau'` ecrasait le statut existant avec 'Nouveau' si le champ n etait pas envoye | Lecture du statut courant depuis la BDD, utilise comme valeur de repli si `statut` absent du body |
+| C12 | Moyenne | routes/actions.js | PATCH /traiter : champ `key` acceptait toute chaine arbitraire → pollution de la table `alertes_traitees` | Validation format `cat|owner|entity` par regex + longueur max 500 caracteres avant INSERT |
