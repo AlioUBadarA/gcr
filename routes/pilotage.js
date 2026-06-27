@@ -8,9 +8,13 @@ const router = express.Router();
 router.use(auth, requirePerm('pilotage:access'));
 
 const JOURS = ['Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi'];
+const SEMAINE_RE = /^\d{4}-W(0[1-9]|[1-4]\d|5[0-3])$/;
+function validSemaine(s) { return typeof s === 'string' && SEMAINE_RE.test(s); }
 
 // GET /api/pilotage/equipe/:semaine — vue consolidée de toute l'équipe (manager/directeur/rizier)
 router.get('/equipe/:semaine', attachScopeIds, async (req, res) => {
+  if (!validSemaine(req.params.semaine))
+    return res.status(400).json({ error: 'Format semaine invalide (YYYY-Www attendu)' });
   try {
     const result = await pool.query(
       `SELECT p.*, u.nom AS vendeur_nom
@@ -31,6 +35,8 @@ router.get('/equipe/:semaine', attachScopeIds, async (req, res) => {
 
 // GET /api/pilotage/:semaine
 router.get('/:semaine', async (req, res) => {
+  if (!validSemaine(req.params.semaine))
+    return res.status(400).json({ error: 'Format semaine invalide (YYYY-Www attendu)' });
   try {
     const result = await pool.query(
       `SELECT * FROM pilotage WHERE user_id=$1 AND semaine=$2 ORDER BY
@@ -57,6 +63,8 @@ router.put('/:semaine', async (req, res) => {
   const { semaine } = req.params;
   const { jours } = req.body; // tableau de 6 objets
 
+  if (!validSemaine(semaine))
+    return res.status(400).json({ error: 'Format semaine invalide (YYYY-Www attendu)' });
   if (!Array.isArray(jours))
     return res.status(400).json({ error: 'jours doit etre un tableau' });
 

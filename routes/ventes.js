@@ -145,12 +145,14 @@ router.get('/:id', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const { client_id, client_nom, date_vente, produit, quantite, prix_unitaire, statut_paiement, date_echeance, mode, cout_unitaire, note } = req.body;
+    if (!client_nom || !date_vente || !produit || !quantite || !prix_unitaire)
+      return res.status(400).json({ error: 'Champs requis : client_nom, date_vente, produit, quantite, prix_unitaire' });
     if (statut_paiement && !STATUTS.includes(statut_paiement))
       return res.status(400).json({ error: 'Statut invalide' });
     if (mode && !MODES.includes(mode)) return res.status(400).json({ error: 'Mode de paiement invalide' });
-    if (quantite !== undefined && !isPositiveNumber(quantite))
+    if (!isPositiveNumber(quantite))
       return res.status(400).json({ error: 'quantite doit etre un nombre positif' });
-    if (prix_unitaire !== undefined && !isPositiveNumber(prix_unitaire))
+    if (!isPositiveNumber(prix_unitaire))
       return res.status(400).json({ error: 'prix_unitaire doit etre un nombre positif' });
     if (cout_unitaire !== undefined && cout_unitaire !== null && !isNonNegativeNumber(cout_unitaire))
       return res.status(400).json({ error: 'cout_unitaire doit etre un nombre positif ou nul' });
@@ -160,6 +162,17 @@ router.put('/:id', async (req, res) => {
       return res.status(400).json({ error: 'date_echeance invalide (format YYYY-MM-DD attendu)' });
     if (!maxLen(client_nom, 200)) return res.status(400).json({ error: 'client_nom trop long (200 caracteres max)' });
     if (!maxLen(note, 2000))      return res.status(400).json({ error: 'note trop longue (2000 caracteres max)' });
+
+    // Vérifier que client_id, s'il est fourni, appartient bien à la rizerie de l'utilisateur
+    if (client_id) {
+      const { getScopeIds } = require('../middleware/scope');
+      const rizerieR = await pool.query('SELECT rizerie_id FROM users WHERE id=$1', [req.userId]);
+      const rizerieId = rizerieR.rows[0]?.rizerie_id;
+      if (rizerieId) {
+        const owns = await pool.query('SELECT id FROM clients WHERE id=$1 AND rizerie_id=$2', [client_id, rizerieId]);
+        if (!owns.rows.length) return res.status(400).json({ error: 'client_id invalide' });
+      }
+    }
 
     const ownerOnly = ['vendeur', 'manager'].includes(req.userRole);
     const filterClause = ownerOnly

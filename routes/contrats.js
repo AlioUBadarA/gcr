@@ -4,6 +4,7 @@ const auth = require('../middleware/auth');
 const { getScopeIds } = require('../middleware/scope');
 const { findOrCreateClient } = require('./clients');
 const { isPositiveNumber, isNonNegativeNumber, isValidDate, maxLen } = require('../middleware/validate');
+const { requirePerm } = require('../middleware/permissions');
 
 const router = express.Router();
 router.use(auth);
@@ -85,8 +86,8 @@ router.post('/clients', async (req, res) => {
   }
 });
 
-// PUT /api/contrats/clients/:id
-router.put('/clients/:id', async (req, res) => {
+// PUT /api/contrats/clients/:id — manager+ seulement (vendeur ne peut pas modifier le contrat d'un collègue)
+router.put('/clients/:id', requirePerm('ventes:statut'), async (req, res) => {
   try {
     const { client_nom, produits, quantite_mensuelle, prix_unitaire, date_debut, date_fin, statut, note } = req.body;
     const produitsArr = Array.isArray(produits) && produits.length > 0 ? produits : [];
@@ -141,8 +142,8 @@ router.get('/clients/:id', async (req, res) => {
   }
 });
 
-// DELETE /api/contrats/clients/:id
-router.delete('/clients/:id', async (req, res) => {
+// DELETE /api/contrats/clients/:id — manager+ seulement
+router.delete('/clients/:id', requirePerm('ventes:delete'), async (req, res) => {
   try {
     const ids = await getScopeIds(req.userId, req.userRole);
     const result = await pool.query(
@@ -219,8 +220,8 @@ router.post('/paddy', async (req, res) => {
   }
 });
 
-// PUT /api/contrats/paddy/:id
-router.put('/paddy/:id', async (req, res) => {
+// PUT /api/contrats/paddy/:id — manager+ seulement
+router.put('/paddy/:id', requirePerm('ventes:statut'), async (req, res) => {
   try {
     const { producteur_nom, zone, telephone, variete, quantite_kg, prix_kg, date_debut, date_fin, statut, note } = req.body;
     if (quantite_kg !== undefined && quantite_kg !== null && !isNonNegativeNumber(quantite_kg))
@@ -251,8 +252,8 @@ router.put('/paddy/:id', async (req, res) => {
   }
 });
 
-// DELETE /api/contrats/paddy/:id
-router.delete('/paddy/:id', async (req, res) => {
+// DELETE /api/contrats/paddy/:id — manager+ seulement
+router.delete('/paddy/:id', requirePerm('ventes:delete'), async (req, res) => {
   try {
     const ids = await getScopeIds(req.userId, req.userRole);
     const result = await pool.query(

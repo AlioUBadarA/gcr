@@ -131,6 +131,7 @@ router.get('/me', auth, async (req, res) => {
 router.put('/me', auth, async (req, res) => {
   try {
     const { nom, rizerie, telephone, ville } = req.body;
+    if (!nom || !nom.trim()) return res.status(400).json({ error: 'Nom requis' });
     const result = await pool.query(
       `UPDATE users SET nom=$1, rizerie=$2, telephone=$3, ville=$4
        WHERE id=$5

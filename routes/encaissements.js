@@ -185,20 +185,22 @@ router.delete('/versements/:id', requirePerm('encaissements:versement'), async (
     const ids = req.scopeIds;
 
     await withTransaction(async (client) => {
-      // Récupère le versement et vérifie l'appartenance via la vente ou le contrat
+      // Récupère le versement et vérifie l'appartenance via la vente, contrat_client ou contrat_paddy
       const verR = await client.query(
-        `SELECT v.*, vt.user_id AS vente_user_id, cc.user_id AS contrat_user_id
+        `SELECT v.*, vt.user_id AS vente_user_id, cc.user_id AS contrat_user_id, cp.user_id AS paddy_user_id
          FROM versements v
          LEFT JOIN ventes            vt ON vt.id = v.vente_id
          LEFT JOIN contrats_clients  cc ON cc.id = v.contrat_client_id
+         LEFT JOIN contrats_paddy    cp ON cp.id = v.contrat_paddy_id
          WHERE v.id = $1`,
         [req.params.id]
       );
       if (!verR.rows.length) { const e = new Error('Versement non trouvé'); e.status = 404; throw e; }
       const ver = verR.rows[0];
 
-      const ownerId = ver.vente_user_id || ver.contrat_user_id;
-      if (!ids.includes(ownerId) && !ids.map(String).includes(String(ownerId))) {
+      const ownerId = ver.vente_user_id || ver.contrat_user_id || ver.paddy_user_id;
+      const idsSet = new Set(ids.map(String));
+      if (!ownerId || !idsSet.has(String(ownerId))) {
         const e = new Error('Versement non trouvé'); e.status = 404; throw e;
       }
 

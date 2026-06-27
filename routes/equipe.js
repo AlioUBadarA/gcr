@@ -128,6 +128,13 @@ router.post('/', canManage, async (req, res) => {
 router.put('/:id', canManage, attachScopeIds, async (req, res) => {
   try {
     const { nom, email, telephone } = req.body;
+    if (email) {
+      const dup = await pool.query(
+        'SELECT id FROM users WHERE LOWER(email)=$1 AND id != $2',
+        [email.toLowerCase(), req.params.id]
+      );
+      if (dup.rows.length) return res.status(409).json({ error: 'Cet email est déjà utilisé' });
+    }
     const result = await pool.query(
       `UPDATE users SET nom=$1, email=$2, telephone=$3
        WHERE id=$4 AND id = ANY($5::uuid[]) AND role IN ('vendeur','manager','directeur')

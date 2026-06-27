@@ -59,17 +59,28 @@ router.put('/:id', async (req, res) => {
   try {
     const { nom, type_client, zone, region, source, telephone, statut, priorite, date_contact, note, valeur_estimee } = req.body;
     if (!nom) return res.status(400).json({ error: 'Nom requis' });
-    if (statut && !STATUTS.includes(statut))
+    if (statut !== undefined && !STATUTS.includes(statut))
       return res.status(400).json({ error: 'Statut invalide' });
-    if (priorite && !PRIORITES.includes(priorite))
+    if (priorite !== undefined && !PRIORITES.includes(priorite))
       return res.status(400).json({ error: 'Priorite invalide' });
     const ids = await getScopeIds(req.userId, req.userRole);
+
+    // Lecture du statut actuel pour ne pas l'écraser s'il n'est pas fourni
+    const current = await pool.query(
+      'SELECT statut, priorite FROM prospection WHERE id=$1 AND user_id = ANY($2::uuid[])',
+      [req.params.id, ids]
+    );
+    if (!current.rows.length) return res.status(404).json({ error: 'Prospect non trouvé' });
+
+    const finalStatut  = statut  !== undefined ? statut  : current.rows[0].statut;
+    const finalPriorite = priorite !== undefined ? priorite : current.rows[0].priorite;
+
     const result = await pool.query(
       `UPDATE prospection SET nom=$1, type_client=$2, zone=$3, region=$4, source=$5, telephone=$6,
          statut=$7, priorite=$8, date_contact=$9, note=$10, valeur_estimee=$11
        WHERE id=$12 AND user_id = ANY($13::uuid[]) RETURNING *`,
       [nom, type_client || null, zone || null, region || null, source || null, telephone || null,
-       statut || 'Nouveau', priorite || 'Normale', date_contact || null, note || null, +valeur_estimee || 0,
+       finalStatut, finalPriorite, date_contact || null, note || null, +valeur_estimee || 0,
        req.params.id, ids]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Prospect non trouvé' });

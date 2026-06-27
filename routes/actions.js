@@ -133,6 +133,9 @@ router.patch('/traiter', async (req, res) => {
   try {
     const { key, traitee } = req.body;
     if (!key) return res.status(400).json({ error: 'Clé d\'alerte requise' });
+    // Format attendu : "categorie|owner_id|entity_id" — rejeter les clés malformées
+    if (typeof key !== 'string' || key.length > 500 || !/^[^|]+\|[^|]*\|[^|]*$/.test(key))
+      return res.status(400).json({ error: 'Format de clé invalide' });
     if (traitee) {
       await pool.query(
         `INSERT INTO alertes_traitees (user_id, alerte_key) VALUES ($1,$2)

@@ -80,33 +80,39 @@ router.post('/', async (req, res) => {
 
       const exists = await pool.query('SELECT id FROM users WHERE email=$1', [email.toLowerCase()]);
       if (exists.rows.length) return res.status(409).json({ error: 'Cet email est déjà utilisé' });
-
-      const creatorR = await pool.query(
-        'SELECT rizerie_id, rizerie FROM users WHERE id=$1', [req.userId]
-      );
-      const creator = creatorR.rows[0] || {};
-
-      const hash = await bcrypt.hash(password, 12);
-      const userR = await pool.query(
-        `INSERT INTO users (nom, email, password, role, parent_id, rizerie_id, rizerie)
-         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
-        [nom.trim(), email.toLowerCase().trim(), hash, role_plateforme,
-         req.userId, creator.rizerie_id || null, creator.rizerie || null]
-      );
-      userAccountId = userR.rows[0].id;
     }
 
     const periodeVal = ['Avant RIZAO', 'Avec RIZAO'].includes(periode_rizao) ? periode_rizao : 'Avec RIZAO';
-    const result = await pool.query(
-      `INSERT INTO emplois
-         (user_id, nom, poste, type_contrat, date_embauche, salaire, telephone, note,
-          user_account_id, role_plateforme, periode_rizao)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
-      [req.userId, nom.trim(), poste || null, type_contrat || 'CDI',
-       date_embauche || null, salaire || null, telephone || null, note || null,
-       userAccountId, role_plateforme || null, periodeVal]
-    );
-    res.status(201).json(result.rows[0]);
+
+    // Création atomique : compte plateforme + fiche employé dans la même transaction
+    const emploi = await withTransaction(async (client) => {
+      let accountId = null;
+      if (role_plateforme) {
+        const creatorR = await client.query(
+          'SELECT rizerie_id, rizerie FROM users WHERE id=$1', [req.userId]
+        );
+        const creator = creatorR.rows[0] || {};
+        const hash = await bcrypt.hash(password, 12);
+        const userR = await client.query(
+          `INSERT INTO users (nom, email, password, role, parent_id, rizerie_id, rizerie)
+           VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+          [nom.trim(), email.toLowerCase().trim(), hash, role_plateforme,
+           req.userId, creator.rizerie_id || null, creator.rizerie || null]
+        );
+        accountId = userR.rows[0].id;
+      }
+      const r = await client.query(
+        `INSERT INTO emplois
+           (user_id, nom, poste, type_contrat, date_embauche, salaire, telephone, note,
+            user_account_id, role_plateforme, periode_rizao)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+        [req.userId, nom.trim(), poste || null, type_contrat || 'CDI',
+         date_embauche || null, salaire || null, telephone || null, note || null,
+         accountId, role_plateforme || null, periodeVal]
+      );
+      return r.rows[0];
+    });
+    res.status(201).json(emploi);
   } catch (err) {
     console.error('POST emplois:', err.message);
     res.status(500).json({ error: 'Erreur serveur' });
