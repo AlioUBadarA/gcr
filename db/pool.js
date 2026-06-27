@@ -322,6 +322,15 @@ async function runMigrations() {
      WHERE u.rizerie_id IS NOT NULL
      GROUP BY u.rizerie_id, EXTRACT(YEAR FROM c.created_at)::INT
      ON CONFLICT DO NOTHING`,
+    // ── Versements sur contrats paddy ──────────────────────────────
+    `ALTER TABLE versements ADD COLUMN IF NOT EXISTS contrat_paddy_id UUID REFERENCES contrats_paddy(id) ON DELETE CASCADE`,
+    `CREATE INDEX IF NOT EXISTS idx_versements_contrat_paddy ON versements(contrat_paddy_id)`,
+    // Mise à jour de la contrainte pour autoriser 1 parmi 3 cibles (vente, contrat_client, contrat_paddy)
+    `DO $$ BEGIN
+       ALTER TABLE versements DROP CONSTRAINT IF EXISTS versements_one_target_check;
+       ALTER TABLE versements ADD CONSTRAINT versements_one_target_check
+         CHECK (num_nonnulls(vente_id, contrat_client_id, contrat_paddy_id) = 1);
+     EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
   ];
 
   for (let i = 0; i < migrations.length; i++) {

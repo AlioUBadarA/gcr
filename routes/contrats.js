@@ -25,9 +25,12 @@ router.get('/clients', async (req, res) => {
       [ids]
     );
     const { statut } = req.query;
-    let q = `SELECT cc.*, u.nom AS vendeur_nom
+    let q = `SELECT cc.*, u.nom AS vendeur_nom,
+               COALESCE(ve.total_verse, 0) AS total_verse
              FROM contrats_clients cc
              LEFT JOIN users u ON u.id = cc.user_id
+             LEFT JOIN (SELECT contrat_client_id, SUM(montant) AS total_verse
+                        FROM versements GROUP BY contrat_client_id) ve ON ve.contrat_client_id = cc.id
              WHERE cc.user_id = ANY($1::uuid[])`;
     const params = [ids];
     if (statut && STATUTS.includes(statut)) {
@@ -112,6 +115,28 @@ router.put('/clients/:id', async (req, res) => {
     if (!result.rows.length) return res.status(404).json({ error: 'Contrat non trouvé' });
     res.json(result.rows[0]);
   } catch (err) {
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// GET /api/contrats/clients/:id
+router.get('/clients/:id', async (req, res) => {
+  try {
+    const ids = await getScopeIds(req.userId, req.userRole);
+    const result = await pool.query(
+      `SELECT cc.*, u.nom AS vendeur_nom,
+               COALESCE(ve.total_verse, 0) AS total_verse
+       FROM contrats_clients cc
+       LEFT JOIN users u ON u.id = cc.user_id
+       LEFT JOIN (SELECT contrat_client_id, SUM(montant) AS total_verse
+                  FROM versements GROUP BY contrat_client_id) ve ON ve.contrat_client_id = cc.id
+       WHERE cc.id=$1 AND cc.user_id = ANY($2::uuid[])`,
+      [req.params.id, ids]
+    );
+    if (!result.rows.length) return res.status(404).json({ error: 'Contrat non trouvé' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('GET contrats/clients/:id:', err.message);
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });

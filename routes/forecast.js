@@ -121,4 +121,18 @@ router.post('/', async (req, res) => {
   }
 });
 
+// DELETE /api/forecast/:id — supprimer un objectif mensuel
+router.delete('/:id', async (req, res) => {
+  try {
+    const result = await pool.query(
+      'DELETE FROM forecast WHERE id=$1 AND user_id=$2 RETURNING id',
+      [req.params.id, req.userId]
+    );
+    if (!result.rows.length) return res.status(404).json({ error: 'Objectif non trouvé' });
+    res.json({ message: 'Objectif supprimé' });
+  } catch (err) {
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
 module.exports = router;

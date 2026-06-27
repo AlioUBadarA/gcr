@@ -27,6 +27,23 @@ router.get('/', async (req, res) => {
   }
 });
 
+// GET /api/emplois/:id
+router.get('/:id', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT e.*, u.email AS compte_email, u.suspended AS compte_suspendu
+       FROM emplois e
+       LEFT JOIN users u ON u.id = e.user_account_id
+       WHERE e.id=$1 AND e.user_id=$2`,
+      [req.params.id, req.userId]
+    );
+    if (!result.rows.length) return res.status(404).json({ error: 'Employé non trouvé' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
 // POST /api/emplois
 // Si role_plateforme est fourni (vendeur|manager|directeur), crée automatiquement
 // un compte plateforme lié à la rizerie du créateur.

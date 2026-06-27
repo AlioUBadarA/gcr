@@ -61,8 +61,9 @@ router.get('/mois', async (req, res) => {
        FROM versements v
        LEFT JOIN ventes        vt ON vt.id = v.vente_id
        LEFT JOIN contrats_clients cc ON cc.id = v.contrat_client_id
+       LEFT JOIN contrats_paddy    cp ON cp.id = v.contrat_paddy_id
        WHERE DATE_TRUNC('month', v.date::date) = DATE_TRUNC('month', CURRENT_DATE)
-         AND (vt.user_id = ANY($1::uuid[]) OR cc.user_id = ANY($1::uuid[]))`,
+         AND (vt.user_id = ANY($1::uuid[]) OR cc.user_id = ANY($1::uuid[]) OR cp.user_id = ANY($1::uuid[]))`,
       [ids]
     );
     res.json({ total: Number(result.rows[0].total) });
@@ -73,8 +74,9 @@ router.get('/mois', async (req, res) => {
 });
 
 function targetTable(type) {
-  if (type === 'vente') return { table: 'ventes', column: 'vente_id' };
+  if (type === 'vente')   return { table: 'ventes',           column: 'vente_id' };
   if (type === 'contrat') return { table: 'contrats_clients', column: 'contrat_client_id' };
+  if (type === 'paddy')   return { table: 'contrats_paddy',   column: 'contrat_paddy_id' };
   return null;
 }
 

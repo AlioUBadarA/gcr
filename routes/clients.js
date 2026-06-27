@@ -44,10 +44,9 @@ async function findOrCreateClient(userId, clientNom, telephone) {
     }
   }
 
-  const byName = await pool.query(
-    'SELECT * FROM clients WHERE user_id=$1 AND LOWER(nom)=LOWER($2) LIMIT 1',
-    [userId, nom]
-  );
+  const byName = rizerieId
+    ? await pool.query('SELECT * FROM clients WHERE rizerie_id=$1 AND LOWER(nom)=LOWER($2) LIMIT 1', [rizerieId, nom])
+    : await pool.query('SELECT * FROM clients WHERE user_id=$1 AND LOWER(nom)=LOWER($2) LIMIT 1', [userId, nom]);
   if (byName.rows.length) {
     const c = byName.rows[0];
     const updated = await pool.query(
@@ -101,7 +100,7 @@ router.get('/', async (req, res) => {
     const rows = result.rows.map(r => ({
       ...r,
       can_edit: canEditAll || scopeSet.has(String(r.user_id)),
-      can_delete: ['directeur', 'rizier', 'superadmin'].includes(req.userRole),
+      can_delete: ['directeur', 'rizier', 'superadmin', 'support'].includes(req.userRole),
     }));
     res.json(rows);
   } catch (err) {
@@ -190,7 +189,7 @@ router.get('/:id', async (req, res) => {
     res.json({
       ...c,
       can_edit: canEditAll || scopeSet.has(String(c.user_id)),
-      can_delete: ['directeur', 'rizier', 'superadmin'].includes(req.userRole),
+      can_delete: ['directeur', 'rizier', 'superadmin', 'support'].includes(req.userRole),
     });
   } catch (err) {
     res.status(500).json({ error: 'Erreur serveur' });
@@ -268,7 +267,7 @@ router.patch('/:id/statut', async (req, res) => {
 // DELETE /api/clients/:id — directeur et rizier uniquement
 router.delete('/:id', async (req, res) => {
   try {
-    if (!['directeur', 'rizier', 'superadmin'].includes(req.userRole))
+    if (!['directeur', 'rizier', 'superadmin', 'support'].includes(req.userRole))
       return res.status(403).json({ error: 'Seul le directeur peut supprimer un client' });
 
     const rizerieId = await getUserRizerieId(req.userId);

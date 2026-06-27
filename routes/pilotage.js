@@ -9,6 +9,26 @@ router.use(auth, requirePerm('pilotage:access'));
 
 const JOURS = ['Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi'];
 
+// GET /api/pilotage/equipe/:semaine — vue consolidée de toute l'équipe (manager/directeur/rizier)
+router.get('/equipe/:semaine', attachScopeIds, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT p.*, u.nom AS vendeur_nom
+       FROM pilotage p
+       JOIN users u ON u.id = p.user_id
+       WHERE p.user_id = ANY($1::uuid[]) AND p.semaine = $2
+       ORDER BY u.nom,
+         CASE p.jour WHEN 'Lundi' THEN 1 WHEN 'Mardi' THEN 2 WHEN 'Mercredi' THEN 3
+                     WHEN 'Jeudi' THEN 4 WHEN 'Vendredi' THEN 5 WHEN 'Samedi' THEN 6 END`,
+      [req.scopeIds, req.params.semaine]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error('GET pilotage equipe:', err.message);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
 // GET /api/pilotage/:semaine
 router.get('/:semaine', async (req, res) => {
   try {
