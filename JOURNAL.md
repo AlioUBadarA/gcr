@@ -174,4 +174,29 @@
 
 ---
 
-*Fichier généré automatiquement — dernière mise à jour : 24 juin 2026*
+### Soir — Corrections RBAC & Encaissements
+
+#### Fixes interface
+- Fix assignation vendeur → manager corrigée dans le panel admin
+
+#### Sidebar vendeur
+- Retire "Direction" des onglets accessibles aux vendeurs (réservé managers+)
+- Kebab menu ajouté sur les pages Produits, Recouvrement et Encaissements
+- Fix kebab menu dans la page Ventes
+
+#### Backend — Encaissements
+- **Nouvel endpoint** `GET /api/encaissements/mois` — versements encaissés ce mois, filtrés par scope
+
+#### Sécurité RBAC
+- `DELETE /api/ventes/:id` réservé manager+ (403 pour vendeur)
+- Numéros de transaction globaux par rizerie — compteur atomique sans race condition
+
+---
+
+## 25 juin 2026
+
+*(aucun commit enregistré)*
+
+---
+
+*Fichier généré automatiquement — dernière mise à jour : 25 juin 2026*

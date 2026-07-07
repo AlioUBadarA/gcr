@@ -866,6 +866,66 @@ router.get('/export', async (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════════
+// CONNEXIONS — statistiques de connexion à la plateforme
+// ══════════════════════════════════════════════════════════════
+
+// GET /api/admin/connexions
+router.get('/connexions', async (req, res) => {
+  try {
+    const [parJourR, recentsR, kpiR] = await Promise.all([
+      // Connexions par jour sur les 30 derniers jours
+      pool.query(`
+        SELECT
+          created_at::date                    AS date,
+          COUNT(*)::int                       AS nb_connexions,
+          COUNT(DISTINCT actor_id)::int       AS nb_utilisateurs
+        FROM audit_logs
+        WHERE action = 'LOGIN_SUCCESS'
+          AND created_at >= NOW() - INTERVAL '30 days'
+        GROUP BY created_at::date
+        ORDER BY date
+      `),
+      // 100 dernières connexions avec détails utilisateur
+      pool.query(`
+        SELECT
+          al.created_at,
+          al.actor_id,
+          al.actor_nom,
+          al.ip,
+          u.role,
+          u.rizerie,
+          r.pays
+        FROM audit_logs al
+        LEFT JOIN users u ON u.id = al.actor_id
+        LEFT JOIN rizeries r ON r.id = u.rizerie_id
+        WHERE al.action = 'LOGIN_SUCCESS'
+        ORDER BY al.created_at DESC
+        LIMIT 100
+      `),
+      // KPIs rapides
+      pool.query(`
+        SELECT
+          COUNT(*) FILTER (WHERE created_at::date = CURRENT_DATE)::int             AS aujourd_hui,
+          COUNT(*) FILTER (WHERE created_at >= date_trunc('week', NOW()))::int      AS cette_semaine,
+          COUNT(*) FILTER (WHERE created_at >= date_trunc('month', NOW()))::int     AS ce_mois,
+          COUNT(DISTINCT actor_id) FILTER (WHERE created_at::date = CURRENT_DATE)::int AS uniques_aujourd_hui
+        FROM audit_logs
+        WHERE action = 'LOGIN_SUCCESS'
+      `),
+    ]);
+
+    res.json({
+      kpi:      kpiR.rows[0],
+      parJour:  parJourR.rows,
+      recents:  recentsR.rows,
+    });
+  } catch (err) {
+    logger.error('GET connexions', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════
 // AUDIT LOG
 // ══════════════════════════════════════════════════════════════
 
