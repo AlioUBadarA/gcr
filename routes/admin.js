@@ -889,14 +889,14 @@ router.get('/connexions', async (req, res) => {
       pool.query(`
         SELECT
           al.created_at,
-          al.actor_id,
-          al.actor_nom,
+          al.target_id   AS actor_id,
+          al.target_nom  AS actor_nom,
           al.ip,
           u.role,
           u.rizerie,
           r.pays
         FROM audit_logs al
-        LEFT JOIN users u ON u.id = al.actor_id
+        LEFT JOIN users u ON u.id = al.target_id
         LEFT JOIN rizeries r ON r.id = u.rizerie_id
         WHERE al.action = 'LOGIN_SUCCESS'
         ORDER BY al.created_at DESC
