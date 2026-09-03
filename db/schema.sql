@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS users (
   suspended        BOOLEAN NOT NULL DEFAULT FALSE,
   suspended_at     TIMESTAMPTZ,
   suspended_reason TEXT,
+  must_change_password BOOLEAN NOT NULL DEFAULT FALSE,
   created_at       TIMESTAMPTZ DEFAULT NOW(),
   updated_at       TIMESTAMPTZ DEFAULT NOW()
 );
@@ -30,6 +31,7 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS suspended_at     TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS suspended_reason TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS parent_id        UUID REFERENCES users(id) ON DELETE SET NULL;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS zone             VARCHAR(100);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- Étend la contrainte role pour inclure vendeur, support, puis manager
 DO $$

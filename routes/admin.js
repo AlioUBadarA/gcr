@@ -188,7 +188,7 @@ router.get('/users/:id', async (req, res) => {
     const [userR, ventesR, clientsR, pilotageR, vendeursR, managersR] = await Promise.all([
       pool.query(
         `SELECT id, nom, email, rizerie, telephone, ville, role,
-                suspended, suspended_reason, suspended_at, created_at
+                suspended, suspended_reason, suspended_at, must_change_password, created_at
          FROM users WHERE id = $1`, [req.params.id]
       ),
       pool.query(
@@ -416,7 +416,7 @@ router.patch('/users/:id/password', async (req, res) => {
 
     const hash = await bcrypt.hash(new_password, 12);
     const result = await pool.query(
-      `UPDATE users SET password=$1 WHERE id=$2 RETURNING id, nom, email`,
+      `UPDATE users SET password=$1, must_change_password=FALSE WHERE id=$2 RETURNING id, nom, email`,
       [hash, req.params.id]
     );
     await log(req.userId, req.userNom, 'PASSWORD_RESET',
@@ -424,6 +424,28 @@ router.patch('/users/:id/password', async (req, res) => {
     res.json({ message: 'Mot de passe réinitialisé avec succès' });
   } catch (err) {
     logger.error('admin reset password', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// PATCH /api/admin/users/:id/force-password-change — oblige l'utilisateur à changer
+// son mot de passe à sa prochaine connexion (sans que l'admin en choisisse un nouveau).
+router.patch('/users/:id/force-password-change', async (req, res) => {
+  try {
+    const targetR = await pool.query('SELECT id, nom, email, role FROM users WHERE id=$1', [req.params.id]);
+    if (!targetR.rows.length) return res.status(404).json({ error: 'Utilisateur non trouvé' });
+    if (['superadmin', 'support'].includes(targetR.rows[0].role) && req.userRole !== 'superadmin')
+      return res.status(403).json({ error: 'Seul le superadmin peut forcer ce changement' });
+
+    const result = await pool.query(
+      `UPDATE users SET must_change_password=TRUE WHERE id=$1 RETURNING id, nom, email`,
+      [req.params.id]
+    );
+    await log(req.userId, req.userNom, 'PASSWORD_CHANGE_FORCED',
+              result.rows[0], {}, req.ip);
+    res.json({ message: 'L\'utilisateur devra changer son mot de passe à sa prochaine connexion' });
+  } catch (err) {
+    logger.error('admin force password change', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });

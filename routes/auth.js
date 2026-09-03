@@ -37,7 +37,7 @@ router.post('/login', async (req, res) => {
 
     const result = await pool.query(
       `SELECT u.id, u.nom, u.email, u.password, u.rizerie, u.telephone, u.ville,
-              u.role, u.suspended, u.suspended_reason,
+              u.role, u.suspended, u.suspended_reason, u.must_change_password,
               u.login_attempts, u.locked_until, r.pays
        FROM users u
        LEFT JOIN rizeries r ON r.id = u.rizerie_id
@@ -110,7 +110,7 @@ router.post('/login', async (req, res) => {
       { expiresIn: '7d' }
     );
 
-    res.json({ token, user: { id: user.id, nom: user.nom, email: user.email, rizerie: user.rizerie, telephone: user.telephone, ville: user.ville, role: user.role, pays: user.pays || null } });
+    res.json({ token, user: { id: user.id, nom: user.nom, email: user.email, rizerie: user.rizerie, telephone: user.telephone, ville: user.ville, role: user.role, pays: user.pays || null, must_change_password: user.must_change_password } });
   } catch (err) {
     logger.error('login', { err: err.message, stack: err.stack, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
@@ -122,7 +122,7 @@ const auth = require('../middleware/auth');
 router.get('/me', auth, async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT u.id, u.nom, u.email, u.rizerie, u.telephone, u.ville, u.role, u.created_at, r.pays
+      `SELECT u.id, u.nom, u.email, u.rizerie, u.telephone, u.ville, u.role, u.must_change_password, u.created_at, r.pays
        FROM users u
        LEFT JOIN rizeries r ON r.id = u.rizerie_id
        WHERE u.id = $1`,
@@ -148,6 +148,39 @@ router.put('/me', auth, async (req, res) => {
     );
     res.json(result.rows[0]);
   } catch (err) {
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// PATCH /api/auth/me/password — l'utilisateur change lui-même son mot de passe
+router.patch('/me/password', auth, async (req, res) => {
+  try {
+    const { current_password, new_password } = req.body;
+    if (!current_password || !new_password)
+      return res.status(400).json({ error: 'Mot de passe actuel et nouveau mot de passe requis' });
+    if (new_password.length < 12)
+      return res.status(400).json({ error: 'Mot de passe : 12 caractères minimum' });
+
+    const result = await pool.query('SELECT id, nom, email, password FROM users WHERE id=$1', [req.userId]);
+    if (!result.rows.length) return res.status(404).json({ error: 'Utilisateur non trouvé' });
+    const user = result.rows[0];
+
+    const valid = await bcrypt.compare(current_password, user.password);
+    if (!valid) {
+      await secLog('PASSWORD_CHANGE_SELF_FAILED', user.id, user.nom, {}, req.ip);
+      return res.status(401).json({ error: 'Mot de passe actuel incorrect' });
+    }
+
+    const hash = await bcrypt.hash(new_password, 12);
+    await pool.query(
+      `UPDATE users SET password=$1, must_change_password=FALSE WHERE id=$2`,
+      [hash, user.id]
+    );
+    await secLog('PASSWORD_CHANGE_SELF', user.id, user.nom, {}, req.ip);
+    logger.info('PASSWORD_CHANGE_SELF', { userId: user.id, ip: req.ip });
+    res.json({ message: 'Mot de passe modifié avec succès' });
+  } catch (err) {
+    logger.error('me change password', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });

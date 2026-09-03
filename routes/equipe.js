@@ -23,7 +23,7 @@ router.get('/', canManage, attachScopeIds, async (req, res) => {
 
     const [baseR, forecastR] = await Promise.all([
       pool.query(`
-        SELECT u.id, u.nom, u.email, u.telephone, u.suspended, u.created_at, u.parent_id,
+        SELECT u.id, u.nom, u.email, u.telephone, u.suspended, u.must_change_password, u.created_at, u.parent_id,
                m.nom AS manager_nom,
                COUNT(DISTINCT v.id) FILTER (WHERE EXTRACT(YEAR FROM v.date_vente)=$2) AS nb_ventes,
                COUNT(DISTINCT v.client_id)                                            AS nb_clients,
@@ -250,13 +250,30 @@ router.patch('/:id/password', canManage, attachScopeIds, async (req, res) => {
       return res.status(400).json({ error: 'Mot de passe : 12 caractères minimum' });
     const hash = await bcrypt.hash(new_password, 12);
     const result = await pool.query(
-      `UPDATE users SET password=$1
+      `UPDATE users SET password=$1, must_change_password=FALSE
        WHERE id=$2 AND id = ANY($3::uuid[]) AND role IN ('vendeur','manager','directeur')
        RETURNING id, nom, email`,
       [hash, req.params.id, req.scopeIds]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Vendeur non trouvé' });
     res.json({ message: 'Mot de passe mis à jour' });
+  } catch (err) {
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// PATCH /api/equipe/:id/force-password-change — oblige le commercial à changer
+// son mot de passe à sa prochaine connexion (sans en choisir un nouveau soi-même).
+router.patch('/:id/force-password-change', canManage, attachScopeIds, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `UPDATE users SET must_change_password=TRUE
+       WHERE id=$1 AND id = ANY($2::uuid[]) AND role IN ('vendeur','manager','directeur')
+       RETURNING id, nom, email`,
+      [req.params.id, req.scopeIds]
+    );
+    if (!result.rows.length) return res.status(404).json({ error: 'Vendeur non trouvé' });
+    res.json({ message: 'Il devra changer son mot de passe à sa prochaine connexion' });
   } catch (err) {
     res.status(500).json({ error: 'Erreur serveur' });
   }

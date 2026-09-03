@@ -332,6 +332,8 @@ async function runMigrations() {
        ALTER TABLE versements ADD CONSTRAINT versements_one_target_check
          CHECK (num_nonnulls(vente_id, contrat_client_id, contrat_paddy_id) = 1);
      EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
+    // ── Changement de mot de passe forcé (admin/manager) ──────────
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT FALSE`,
   ];
 
   for (let i = 0; i < migrations.length; i++) {
