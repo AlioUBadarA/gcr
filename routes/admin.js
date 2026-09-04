@@ -450,7 +450,7 @@ router.patch('/users/:id/force-password-change', async (req, res) => {
   }
 });
 
-// POST /api/admin/users/:id/impersonate — token temporaire pour naviguer comme ce rizier
+// POST /api/admin/users/:id/impersonate — token temporaire pour naviguer comme ce compte
 router.post('/users/:id/impersonate', async (req, res) => {
   try {
     const result = await pool.query(
@@ -463,16 +463,17 @@ router.post('/users/:id/impersonate', async (req, res) => {
       return res.status(403).json({ error: 'Impossible d\'impersonner un compte superadmin ou support' });
     if (target.suspended) return res.status(400).json({ error: 'Impossible d\'accéder à un compte suspendu' });
 
-    // Token courte durée (2h) pour l'impersonation
+    // Le token porte le rôle réel du compte cible : la portée (scope.js) et les redirections
+    // frontend restent celles de ce rôle, jamais élargies au périmètre d'un rizier.
     const token = jwt.sign(
-      { userId: target.id, nom: target.nom, role: 'rizier', impersonatedBy: req.userId },
+      { userId: target.id, nom: target.nom, role: target.role, impersonatedBy: req.userId },
       process.env.JWT_SECRET,
       { expiresIn: '2h' }
     );
     await log(req.userId, req.userNom, 'IMPERSONATION_START', target, {}, req.ip);
     res.json({
       token,
-      user: { id: target.id, nom: target.nom, email: target.email, rizerie: target.rizerie, role: 'rizier' },
+      user: { id: target.id, nom: target.nom, email: target.email, rizerie: target.rizerie, role: target.role },
       impersonatedBy: { id: req.userId, nom: req.userNom }
     });
   } catch (err) {
