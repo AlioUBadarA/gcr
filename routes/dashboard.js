@@ -26,15 +26,18 @@ router.get('/', async (req, res) => {
 
       pool.query(`
         SELECT
-          COALESCE(SUM(montant) FILTER (WHERE EXTRACT(MONTH FROM date_vente)=$2 AND EXTRACT(YEAR FROM date_vente)=$3), 0) AS ca_mois,
-          COUNT(*) FILTER (WHERE EXTRACT(MONTH FROM date_vente)=$2 AND EXTRACT(YEAR FROM date_vente)=$3) AS nb_ventes_mois,
-          COALESCE(SUM(montant) FILTER (WHERE EXTRACT(YEAR FROM date_vente)=$3), 0) AS ca_ytd,
-          COUNT(*) FILTER (WHERE EXTRACT(YEAR FROM date_vente)=$3) AS nb_ventes_ytd,
-          COALESCE(SUM(quantite*COALESCE(NULLIF(cout_unitaire,0),0)) FILTER (WHERE EXTRACT(YEAR FROM date_vente)=$3), 0) AS cout_ytd,
-          COALESCE(SUM(montant) FILTER (WHERE statut_paiement != 'Paye'), 0) AS total_creances,
-          COUNT(*) FILTER (WHERE statut_paiement != 'Paye') AS nb_creances,
-          COALESCE(SUM(montant), 0) AS total_facture
-        FROM ventes WHERE user_id = ANY($1::uuid[])`,
+          COALESCE(SUM(v.montant) FILTER (WHERE EXTRACT(MONTH FROM v.date_vente)=$2 AND EXTRACT(YEAR FROM v.date_vente)=$3), 0) AS ca_mois,
+          COUNT(*) FILTER (WHERE EXTRACT(MONTH FROM v.date_vente)=$2 AND EXTRACT(YEAR FROM v.date_vente)=$3) AS nb_ventes_mois,
+          COALESCE(SUM(v.montant) FILTER (WHERE EXTRACT(YEAR FROM v.date_vente)=$3), 0) AS ca_ytd,
+          COUNT(*) FILTER (WHERE EXTRACT(YEAR FROM v.date_vente)=$3) AS nb_ventes_ytd,
+          COALESCE(SUM(v.quantite*COALESCE(NULLIF(v.cout_unitaire,0),0)) FILTER (WHERE EXTRACT(YEAR FROM v.date_vente)=$3), 0) AS cout_ytd,
+          -- Créance = reste à payer (montant - versements déjà reçus), pas le montant brut de la facture
+          COALESCE(SUM(GREATEST(v.montant - COALESCE(ve.total_verse,0), 0)) FILTER (WHERE v.statut_paiement != 'Paye'), 0) AS total_creances,
+          COUNT(*) FILTER (WHERE v.statut_paiement != 'Paye' AND (v.montant - COALESCE(ve.total_verse,0)) > 0) AS nb_creances,
+          COALESCE(SUM(v.montant), 0) AS total_facture
+        FROM ventes v
+        LEFT JOIN (SELECT vente_id, SUM(montant) AS total_verse FROM versements GROUP BY vente_id) ve ON ve.vente_id = v.id
+        WHERE v.user_id = ANY($1::uuid[])`,
         [ids, m, y]
       ),
 
@@ -64,11 +67,13 @@ router.get('/', async (req, res) => {
 
       pool.query(`
         SELECT
-          COALESCE(SUM(montant) FILTER (WHERE statut_paiement='En retard'), 0) AS montant_retard,
-          COUNT(*) FILTER (WHERE statut_paiement='En retard') AS nb_retard,
-          COALESCE(SUM(montant) FILTER (WHERE statut_paiement='En cours'), 0) AS montant_encours,
-          COUNT(*) FILTER (WHERE statut_paiement='En cours') AS nb_encours
-        FROM ventes WHERE user_id = ANY($1::uuid[])`,
+          COALESCE(SUM(GREATEST(v.montant - COALESCE(ve.total_verse,0), 0)) FILTER (WHERE v.statut_paiement='En retard'), 0) AS montant_retard,
+          COUNT(*) FILTER (WHERE v.statut_paiement='En retard' AND (v.montant - COALESCE(ve.total_verse,0)) > 0) AS nb_retard,
+          COALESCE(SUM(GREATEST(v.montant - COALESCE(ve.total_verse,0), 0)) FILTER (WHERE v.statut_paiement IN ('En cours','Non payé')), 0) AS montant_encours,
+          COUNT(*) FILTER (WHERE v.statut_paiement IN ('En cours','Non payé') AND (v.montant - COALESCE(ve.total_verse,0)) > 0) AS nb_encours
+        FROM ventes v
+        LEFT JOIN (SELECT vente_id, SUM(montant) AS total_verse FROM versements GROUP BY vente_id) ve ON ve.vente_id = v.id
+        WHERE v.user_id = ANY($1::uuid[])`,
         [ids]
       ),
 

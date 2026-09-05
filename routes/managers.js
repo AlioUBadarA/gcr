@@ -46,9 +46,11 @@ router.get('/', async (req, res) => {
           [vendeurIds, annee]
         ),
         pool.query(
-          `SELECT user_id, COALESCE(SUM(montant),0) AS creances
-           FROM ventes WHERE user_id = ANY($1::uuid[]) AND statut_paiement != 'Paye'
-           GROUP BY user_id`,
+          `SELECT v.user_id, COALESCE(SUM(GREATEST(v.montant - COALESCE(ve.total_verse,0), 0)),0) AS creances
+           FROM ventes v
+           LEFT JOIN (SELECT vente_id, SUM(montant) AS total_verse FROM versements GROUP BY vente_id) ve ON ve.vente_id = v.id
+           WHERE v.user_id = ANY($1::uuid[]) AND v.statut_paiement != 'Paye'
+           GROUP BY v.user_id`,
           [vendeurIds]
         ),
       ]);

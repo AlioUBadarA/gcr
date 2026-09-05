@@ -85,7 +85,13 @@ router.get('/', async (req, res) => {
       return { trimestre: `T${q} ${annee}`, valeur: val };
     });
 
-    res.json({ annee, months, par_vendeur, quarterly });
+    // Projection annuelle globale — même formule que le dashboard et les vues équipe/managers :
+    // rythme moyen depuis le début de l'année (CA YTD / mois écoulés), étalé sur 12 mois.
+    const totalRealiseYTD = months.filter(mm => mm.mois <= monthsElapsed).reduce((s, mm) => s + mm.realise, 0);
+    const objectifAnnuelTotal = months.reduce((s, mm) => s + mm.objectif, 0);
+    const projectionAnnuelle = Math.round(totalRealiseYTD / monthsElapsed * 12);
+
+    res.json({ annee, months, par_vendeur, quarterly, objectif_annuel: objectifAnnuelTotal, projection_annuelle: projectionAnnuelle });
   } catch (err) {
     logger.error('GET forecast', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });

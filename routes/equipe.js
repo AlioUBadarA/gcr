@@ -29,11 +29,12 @@ router.get('/', canManage, attachScopeIds, async (req, res) => {
                COUNT(DISTINCT v.client_id)                                            AS nb_clients,
                COALESCE(SUM(v.montant) FILTER (WHERE EXTRACT(YEAR FROM v.date_vente)=$2), 0) AS ca_ytd,
                COALESCE(SUM(v.quantite*COALESCE(NULLIF(v.cout_unitaire,0),0)) FILTER (WHERE EXTRACT(YEAR FROM v.date_vente)=$2), 0) AS cout_ytd,
-               COALESCE(SUM(v.montant) FILTER (WHERE v.statut_paiement != 'Paye'), 0) AS creances,
+               COALESCE(SUM(GREATEST(v.montant - COALESCE(ver.total_verse,0), 0)) FILTER (WHERE v.statut_paiement != 'Paye'), 0) AS creances,
                MAX(v.date_vente) AS derniere_vente
         FROM users u
         LEFT JOIN users m ON m.id = u.parent_id AND m.role = 'manager'
         LEFT JOIN ventes v ON v.user_id = u.id
+        LEFT JOIN (SELECT vente_id, SUM(montant) AS total_verse FROM versements GROUP BY vente_id) ver ON ver.vente_id = v.id
         WHERE u.id = ANY($1::uuid[]) AND u.role IN ('vendeur','manager','directeur')
         GROUP BY u.id, m.nom
         ORDER BY u.nom

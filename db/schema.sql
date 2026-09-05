@@ -97,9 +97,6 @@ CREATE TABLE IF NOT EXISTS prospection (
 ALTER TABLE prospection ADD COLUMN IF NOT EXISTS region VARCHAR(100);
 ALTER TABLE prospection ADD COLUMN IF NOT EXISTS source VARCHAR(50);
 
--- cout_unitaire sur ventes pour le calcul de rentabilité
-ALTER TABLE ventes ADD COLUMN IF NOT EXISTS cout_unitaire NUMERIC(10,2) DEFAULT 0;
-
 CREATE INDEX IF NOT EXISTS idx_forecast_user    ON forecast(user_id, annee);
 CREATE INDEX IF NOT EXISTS idx_prospection_user ON prospection(user_id);
 
@@ -118,6 +115,33 @@ CREATE TABLE IF NOT EXISTS emplois (
   created_at    TIMESTAMPTZ DEFAULT NOW(),
   updated_at    TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- ── CLIENTS ──────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS clients (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  nom         VARCHAR(150) NOT NULL,
+  type        VARCHAR(50) NOT NULL CHECK (type IN (
+                'Grossiste','Detaillant marche','Boutique',
+                'Restauration','Cantine/Institution')),
+  statut      VARCHAR(20) NOT NULL DEFAULT 'Prospect' CHECK (statut IN (
+                'Actif','Prospect','Dormant')),
+  zone        VARCHAR(100),
+  region      VARCHAR(100),
+  segment     VARCHAR(100),
+  potentiel_annuel NUMERIC(14,2) DEFAULT 0,
+  telephone   VARCHAR(30),
+  volume_estime NUMERIC(10,2) DEFAULT 0,
+  frequence   VARCHAR(50),
+  valorise    VARCHAR(200),
+  horaire     VARCHAR(80),
+  note        TEXT,
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS region VARCHAR(100);
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS segment VARCHAR(100);
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS potentiel_annuel NUMERIC(14,2) DEFAULT 0;
 
 -- contrats_clients : commandes récurrentes aval
 CREATE TABLE IF NOT EXISTS contrats_clients (
@@ -173,33 +197,6 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_actor   ON audit_logs(actor_id);
-
--- ── CLIENTS ──────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS clients (
-  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  nom         VARCHAR(150) NOT NULL,
-  type        VARCHAR(50) NOT NULL CHECK (type IN (
-                'Grossiste','Detaillant marche','Boutique',
-                'Restauration','Cantine/Institution')),
-  statut      VARCHAR(20) NOT NULL DEFAULT 'Prospect' CHECK (statut IN (
-                'Actif','Prospect','Dormant')),
-  zone        VARCHAR(100),
-  region      VARCHAR(100),
-  segment     VARCHAR(100),
-  potentiel_annuel NUMERIC(14,2) DEFAULT 0,
-  telephone   VARCHAR(30),
-  volume_estime NUMERIC(10,2) DEFAULT 0,
-  frequence   VARCHAR(50),
-  valorise    VARCHAR(200),
-  horaire     VARCHAR(80),
-  note        TEXT,
-  created_at  TIMESTAMPTZ DEFAULT NOW(),
-  updated_at  TIMESTAMPTZ DEFAULT NOW()
-);
-ALTER TABLE clients ADD COLUMN IF NOT EXISTS region VARCHAR(100);
-ALTER TABLE clients ADD COLUMN IF NOT EXISTS segment VARCHAR(100);
-ALTER TABLE clients ADD COLUMN IF NOT EXISTS potentiel_annuel NUMERIC(14,2) DEFAULT 0;
 
 -- ── VENTES ───────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS ventes (
