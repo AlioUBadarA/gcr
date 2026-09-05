@@ -25,9 +25,11 @@ function readClause(role, rizerieId, scopeIds) {
 }
 
 // Cherche par téléphone dans la rizerie puis par nom sous l'utilisateur, crée si absent.
-// Utilisé par ventes.js lors de la création automatique de clients depuis une vente.
-async function findOrCreateClient(userId, clientNom, telephone) {
+// Utilisé par ventes.js lors de la création automatique de clients depuis une vente,
+// et par prospection.js lors de la conversion d'un prospect gagné en client.
+async function findOrCreateClient(userId, clientNom, telephone, type) {
   const nom = clientNom.trim();
+  const typeFinal = TYPES_VALIDES.includes(type) ? type : 'Boutique';
   const rizerieId = await getUserRizerieId(userId);
 
   if (telephone && rizerieId) {
@@ -62,8 +64,8 @@ async function findOrCreateClient(userId, clientNom, telephone) {
 
   const created = await pool.query(
     `INSERT INTO clients (user_id, rizerie_id, nom, type, statut, telephone)
-     VALUES ($1,$2,$3,'Boutique','Actif',$4) RETURNING *`,
-    [userId, rizerieId, nom, telephone || null]
+     VALUES ($1,$2,$3,$4,'Actif',$5) RETURNING *`,
+    [userId, rizerieId, nom, typeFinal, telephone || null]
   );
   return created.rows[0];
 }
@@ -76,9 +78,18 @@ router.get('/', async (req, res) => {
     if (!rizerieId && !['superadmin','support'].includes(req.userRole)) return res.json([]);
 
     const { clause, params } = readClause(req.userRole, rizerieId, req.scopeIds);
-    let q = `SELECT c.*, u.nom AS vendeur_nom
+    // CA/nb ventes/dernier achat calculés sur TOUTES les ventes du client (pas un sous-ensemble
+    // plafonné côté API), pour que le scoring RFM reste correct quel que soit le volume d'activité.
+    let q = `SELECT c.*, u.nom AS vendeur_nom,
+                    COALESCE(vs.nb_ventes, 0) AS nb_ventes,
+                    COALESCE(vs.ca_total, 0)  AS ca_total,
+                    vs.derniere_vente
              FROM clients c
              LEFT JOIN users u ON u.id = c.user_id
+             LEFT JOIN (
+               SELECT client_id, COUNT(*) AS nb_ventes, SUM(montant) AS ca_total, MAX(date_vente) AS derniere_vente
+               FROM ventes WHERE client_id IS NOT NULL GROUP BY client_id
+             ) vs ON vs.client_id = c.id
              WHERE ${clause}`;
     if (statut && STATUTS_VALIDES.includes(statut)) {
       q += ` AND c.statut = $${params.length + 1}`; params.push(statut);

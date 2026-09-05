@@ -10,7 +10,8 @@ const { isPositiveNumber, isNonNegativeNumber, isValidDate, maxLen } = require('
 const router = express.Router();
 router.use(auth, attachScopeIds);
 
-const STATUTS = ['Non payé','En cours','En retard','Paye'];
+// Doit matcher exactement la contrainte CHECK sur ventes.statut_paiement (gcr/db/schema.sql)
+const STATUTS = ['En cours','En retard','Paye'];
 const MODES   = ['Espèces','Virement','Chèque','Mobile Money'];
 
 // GET /api/ventes  (avec filtres)

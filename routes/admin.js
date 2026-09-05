@@ -163,16 +163,20 @@ router.get('/users', async (req, res) => {
         u.role, u.suspended, u.suspended_reason, u.suspended_at,
         u.created_at, u.rizerie_id,
         r.nom AS rizerie_nom,
-        COUNT(DISTINCT v.id)         AS nb_ventes,
-        COUNT(DISTINCT c.id)         AS nb_clients,
-        COALESCE(SUM(v.montant), 0)  AS ca_total,
-        MAX(v.date_vente)            AS derniere_vente
+        COALESCE(v.nb_ventes, 0)    AS nb_ventes,
+        COALESCE(c.nb_clients, 0)   AS nb_clients,
+        COALESCE(v.ca_total, 0)     AS ca_total,
+        v.derniere_vente            AS derniere_vente
       FROM users u
       LEFT JOIN rizeries r ON r.id = u.rizerie_id
-      LEFT JOIN ventes   v ON v.user_id = u.id
-      LEFT JOIN clients  c ON c.user_id = u.id
+      LEFT JOIN (
+        SELECT user_id, COUNT(*) AS nb_ventes, SUM(montant) AS ca_total, MAX(date_vente) AS derniere_vente
+        FROM ventes GROUP BY user_id
+      ) v ON v.user_id = u.id
+      LEFT JOIN (
+        SELECT user_id, COUNT(*) AS nb_clients FROM clients GROUP BY user_id
+      ) c ON c.user_id = u.id
       WHERE u.role = 'rizier'
-      GROUP BY u.id, r.nom
       ORDER BY u.created_at DESC
     `);
     res.json(result.rows);
@@ -185,14 +189,32 @@ router.get('/users', async (req, res) => {
 // GET /api/admin/users/:id — profil complet + ventes + clients + équipe vendeurs
 router.get('/users/:id', async (req, res) => {
   try {
-    const [userR, ventesR, clientsR, pilotageR, vendeursR, managersR] = await Promise.all([
+    const [userR, statsR, ventesR, clientsR, pilotageR, vendeursR, managersR] = await Promise.all([
       pool.query(
         `SELECT id, nom, email, rizerie, telephone, ville, role,
                 suspended, suspended_reason, suspended_at, must_change_password, created_at
          FROM users WHERE id = $1`, [req.params.id]
       ),
+      // Agrégats sur l'ensemble des ventes (pas seulement les 50 plus récentes affichées),
+      // créances nettes des versements déjà reçus.
       pool.query(
-        `SELECT * FROM ventes WHERE user_id = $1 ORDER BY date_vente DESC LIMIT 50`,
+        `SELECT
+           COALESCE(SUM(v.montant), 0) AS ca_total,
+           COUNT(*)                    AS nb_ventes,
+           COALESCE(SUM(GREATEST(v.montant - COALESCE(ve.total_verse,0), 0))
+                     FILTER (WHERE v.statut_paiement != 'Paye'), 0)          AS creances_total
+         FROM ventes v
+         LEFT JOIN (SELECT vente_id, SUM(montant) AS total_verse FROM versements GROUP BY vente_id) ve
+           ON ve.vente_id = v.id
+         WHERE v.user_id = $1`,
+        [req.params.id]
+      ),
+      pool.query(
+        `SELECT v.*, COALESCE(ve.total_verse, 0) AS total_verse
+         FROM ventes v
+         LEFT JOIN (SELECT vente_id, SUM(montant) AS total_verse FROM versements GROUP BY vente_id) ve
+           ON ve.vente_id = v.id
+         WHERE v.user_id = $1 ORDER BY v.date_vente DESC LIMIT 50`,
         [req.params.id]
       ),
       pool.query(
@@ -227,8 +249,14 @@ router.get('/users/:id', async (req, res) => {
     ]);
     if (!userR.rows.length) return res.status(404).json({ error: 'Utilisateur non trouvé' });
 
+    const s = statsR.rows[0];
     res.json({
       user:      userR.rows[0],
+      stats: {
+        ca_total:       Number(s.ca_total),
+        nb_ventes:      Number(s.nb_ventes),
+        creances_total: Number(s.creances_total),
+      },
       managers:  managersR.rows,
       ventes:    ventesR.rows,
       clients:   clientsR.rows,
@@ -990,15 +1018,16 @@ router.get('/performance', async (req, res) => {
     const [globalR, mensuelR, parRizerieR, baselines, contratsR, emploisR] = await Promise.all([
       pool.query(`
         SELECT
-          COALESCE(SUM(v.montant), 0)                                               AS ca_app,
-          COUNT(DISTINCT v.id)                                                       AS nb_ventes,
-          COUNT(DISTINCT v.client_nom)                                               AS nb_clients,
-          COUNT(DISTINCT v.id) FILTER (WHERE v.statut_paiement = 'Paye')            AS nb_paye,
-          COUNT(DISTINCT v.id) FILTER (WHERE v.statut_paiement = 'En cours')        AS nb_en_cours,
-          COUNT(DISTINCT v.id) FILTER (WHERE v.statut_paiement = 'En retard')       AS nb_retard,
-          COALESCE(SUM(vers.montant), 0)                                             AS total_verse
+          COALESCE(SUM(v.montant), 0)                                         AS ca_app,
+          COUNT(*)                                                             AS nb_ventes,
+          COUNT(DISTINCT v.client_nom)                                         AS nb_clients,
+          COUNT(*) FILTER (WHERE v.statut_paiement = 'Paye')                  AS nb_paye,
+          COUNT(*) FILTER (WHERE v.statut_paiement = 'En cours')              AS nb_en_cours,
+          COUNT(*) FILTER (WHERE v.statut_paiement = 'En retard')             AS nb_retard,
+          COALESCE(SUM(vers.total_verse), 0)                                   AS total_verse
         FROM ventes v
-        LEFT JOIN versements vers ON vers.vente_id = v.id
+        LEFT JOIN (SELECT vente_id, SUM(montant) AS total_verse FROM versements GROUP BY vente_id) vers
+          ON vers.vente_id = v.id
       `),
       pool.query(`
         SELECT

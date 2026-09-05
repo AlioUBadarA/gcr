@@ -89,7 +89,7 @@ router.put('/:id', async (req, res) => {
 
     let client_converti = null;
     if (prospect.statut === 'Gagné') {
-      client_converti = await findOrCreateClient(req.userId, prospect.nom, prospect.telephone);
+      client_converti = await findOrCreateClient(req.userId, prospect.nom, prospect.telephone, prospect.type_client);
     }
 
     res.json({ ...prospect, client_converti });
@@ -114,7 +114,7 @@ router.patch('/:id/statut', async (req, res) => {
 
     let client_converti = null;
     if (statut === 'Gagné') {
-      client_converti = await findOrCreateClient(req.userId, prospect.nom, prospect.telephone);
+      client_converti = await findOrCreateClient(req.userId, prospect.nom, prospect.telephone, prospect.type_client);
     }
 
     res.json({ ...prospect, client_converti });

@@ -34,11 +34,16 @@ router.get('/', async (req, res) => {
       `, [ids]),
 
       pool.query(`
-        SELECT v.id, v.client_nom, v.montant, v.user_id, u.nom AS vendeur_nom,
+        SELECT v.id, v.client_nom,
+               GREATEST(v.montant - COALESCE(ve.total_verse,0), 0) AS montant,
+               v.user_id, u.nom AS vendeur_nom,
                (NOW()::date - COALESCE(v.date_echeance, v.date_vente + 30)::date) AS jours_retard
         FROM ventes v
         LEFT JOIN users u ON u.id = v.user_id
+        LEFT JOIN (SELECT vente_id, SUM(montant) AS total_verse FROM versements GROUP BY vente_id) ve
+          ON ve.vente_id = v.id
         WHERE v.user_id = ANY($1::uuid[]) AND v.statut_paiement != 'Paye'
+          AND (v.montant - COALESCE(ve.total_verse,0)) > 0
       `, [ids]),
 
       pool.query(`SELECT id, nom FROM users WHERE id = ANY($1::uuid[]) AND role='vendeur'`, [ids]),

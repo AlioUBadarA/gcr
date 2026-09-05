@@ -17,9 +17,11 @@ router.get('/', async (req, res) => {
 
     const [ventesR, versementsR] = await Promise.all([
       pool.query(
-        `SELECT v.*, u.nom AS vendeur_nom
+        `SELECT v.*, u.nom AS vendeur_nom, COALESCE(ve.total_verse, 0) AS total_verse
          FROM ventes v
          LEFT JOIN users u ON u.id = v.user_id
+         LEFT JOIN (SELECT vente_id, SUM(montant) AS total_verse FROM versements GROUP BY vente_id) ve
+           ON ve.vente_id = v.id
          WHERE v.user_id = ANY($1::uuid[]) AND v.date_vente BETWEEN $2 AND $3
          ORDER BY v.date_vente DESC, v.created_at DESC`,
         [ids, from, to]
