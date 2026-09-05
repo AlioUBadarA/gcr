@@ -334,6 +334,40 @@ async function runMigrations() {
      EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
     // ── Changement de mot de passe forcé (admin/manager) ──────────
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT FALSE`,
+
+    // ── Contrats récurrents : échéancier mensuel ────────────────────
+    // Un contrat client formalise un engagement sur une durée déterminée dont la quantité
+    // ET le prix peuvent varier chaque mois, avec une date de paiement propre à chaque
+    // échéance. Remplace le modèle "quantite_mensuelle/prix_unitaire" figé du contrat, qui
+    // ne permettait ni variation mensuelle ni suivi de paiement mois par mois.
+    `CREATE TABLE IF NOT EXISTS contrat_echeances (
+       id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+       contrat_client_id    UUID NOT NULL REFERENCES contrats_clients(id) ON DELETE CASCADE,
+       annee                INT NOT NULL,
+       mois                 INT NOT NULL CHECK (mois BETWEEN 1 AND 12),
+       quantite             NUMERIC(10,2) NOT NULL DEFAULT 0,
+       prix_unitaire        NUMERIC(10,2) NOT NULL DEFAULT 0,
+       montant              NUMERIC(12,2) GENERATED ALWAYS AS (quantite * prix_unitaire) STORED,
+       date_paiement_prevue DATE,
+       statut_paiement      VARCHAR(20) NOT NULL DEFAULT 'En cours'
+                            CHECK (statut_paiement IN ('En cours','En retard','Paye')),
+       note                 TEXT,
+       created_at           TIMESTAMPTZ DEFAULT NOW(),
+       updated_at           TIMESTAMPTZ DEFAULT NOW(),
+       UNIQUE(contrat_client_id, annee, mois)
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_contrat_echeances_contrat ON contrat_echeances(contrat_client_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_contrat_echeances_date    ON contrat_echeances(date_paiement_prevue)`,
+    // Les paiements sur un contrat récurrent se rattachent désormais à une échéance précise
+    // (un mois donné) plutôt qu'au contrat entier — sinon un seul versement "soldait"
+    // artificiellement tout le contrat aux yeux de l'app, quel que soit le nombre de mois restants.
+    `ALTER TABLE versements ADD COLUMN IF NOT EXISTS contrat_echeance_id UUID REFERENCES contrat_echeances(id) ON DELETE CASCADE`,
+    `CREATE INDEX IF NOT EXISTS idx_versements_contrat_echeance ON versements(contrat_echeance_id)`,
+    `DO $$ BEGIN
+       ALTER TABLE versements DROP CONSTRAINT IF EXISTS versements_one_target_check;
+       ALTER TABLE versements ADD CONSTRAINT versements_one_target_check
+         CHECK (num_nonnulls(vente_id, contrat_client_id, contrat_paddy_id, contrat_echeance_id) = 1);
+     EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
   ];
 
   for (let i = 0; i < migrations.length; i++) {

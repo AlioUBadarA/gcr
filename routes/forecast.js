@@ -15,7 +15,7 @@ router.get('/', async (req, res) => {
     const ids = await getScopeIds(req.userId, req.userRole);
     const monthsElapsed = annee === new Date().getFullYear() ? new Date().getMonth() + 1 : 12;
 
-    const [forecastR, realisR, vendeursR, ventesVendeurR, objVendeurR] = await Promise.all([
+    const [forecastR, realisR, vendeursR, ventesVendeurR, objVendeurR, contractualiseR] = await Promise.all([
       pool.query(
         `SELECT id, mois, produit, objectif_montant, user_id
          FROM forecast WHERE user_id = ANY($1::uuid[]) AND annee = $2
@@ -44,10 +44,23 @@ router.get('/', async (req, res) => {
          GROUP BY user_id`,
         [ids, annee]
       ),
+      // CA contractualisé : engagements formalisés (échéancier des contrats récurrents),
+      // affiché à côté de l'objectif manuel sans jamais l'écraser ni s'y fondre.
+      pool.query(
+        `SELECT e.mois, COALESCE(SUM(e.montant),0) AS contractualise
+         FROM contrat_echeances e
+         JOIN contrats_clients cc ON cc.id = e.contrat_client_id
+         WHERE cc.user_id = ANY($1::uuid[]) AND e.annee = $2
+         GROUP BY e.mois`,
+        [ids, annee]
+      ),
     ]);
 
     const realisMap = {};
     realisR.rows.forEach(r => { realisMap[r.mois] = +r.realise; });
+
+    const contractualiseMap = {};
+    contractualiseR.rows.forEach(r => { contractualiseMap[r.mois] = +r.contractualise; });
 
     const forecastMap = {};
     forecastR.rows.forEach(r => {
@@ -62,6 +75,7 @@ router.get('/', async (req, res) => {
         mois: m,
         objectif: forecastMap[m]?.objectif || 0,
         realise: realisMap[m] || 0,
+        contractualise: contractualiseMap[m] || 0,
         id: forecastMap[m]?.id || null,
       };
     });
@@ -89,9 +103,15 @@ router.get('/', async (req, res) => {
     // rythme moyen depuis le début de l'année (CA YTD / mois écoulés), étalé sur 12 mois.
     const totalRealiseYTD = months.filter(mm => mm.mois <= monthsElapsed).reduce((s, mm) => s + mm.realise, 0);
     const objectifAnnuelTotal = months.reduce((s, mm) => s + mm.objectif, 0);
+    const contractualiseAnnuelTotal = months.reduce((s, mm) => s + mm.contractualise, 0);
     const projectionAnnuelle = Math.round(totalRealiseYTD / monthsElapsed * 12);
 
-    res.json({ annee, months, par_vendeur, quarterly, objectif_annuel: objectifAnnuelTotal, projection_annuelle: projectionAnnuelle });
+    res.json({
+      annee, months, par_vendeur, quarterly,
+      objectif_annuel: objectifAnnuelTotal,
+      contractualise_annuel: contractualiseAnnuelTotal,
+      projection_annuelle: projectionAnnuelle,
+    });
   } catch (err) {
     logger.error('GET forecast', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });

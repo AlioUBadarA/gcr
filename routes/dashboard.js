@@ -19,7 +19,7 @@ router.get('/', async (req, res) => {
     const [
       kpis, mensuel, topClients, creances, clientsStatutR,
       objAnnuelR, segmentR, regionR, produitR,
-      versementsR,
+      versementsR, echeancesR,
       vendeursR, ventesVendeurR, forecastVendeurR,
       mouvementsR,
     ] = await Promise.all([
@@ -113,17 +113,39 @@ router.get('/', async (req, res) => {
         [ids, y]
       ),
 
-      // Encaissements réels : versements sur ventes ET sur contrats clients (par date de versement)
+      // Encaissements réels : versements sur ventes, contrats clients (ancien modèle) ET
+      // échéances de contrat (nouveau modèle, mois par mois) — par date de versement.
       pool.query(`
         SELECT
           COALESCE(SUM(ver.montant) FILTER (WHERE EXTRACT(MONTH FROM ver.date)=$2 AND EXTRACT(YEAR FROM ver.date)=$3), 0) AS encaisse_mois,
           COALESCE(SUM(ver.montant) FILTER (WHERE EXTRACT(YEAR FROM ver.date)=$3), 0) AS encaisse_ytd,
           COALESCE(SUM(ver.montant), 0) AS encaisse_total
         FROM versements ver
-        LEFT JOIN ventes             v  ON v.id  = ver.vente_id
-        LEFT JOIN contrats_clients   cc ON cc.id = ver.contrat_client_id
-        WHERE v.user_id = ANY($1::uuid[]) OR cc.user_id = ANY($1::uuid[])`,
+        LEFT JOIN ventes             v   ON v.id   = ver.vente_id
+        LEFT JOIN contrats_clients   cc  ON cc.id  = ver.contrat_client_id
+        LEFT JOIN contrat_echeances  ce  ON ce.id  = ver.contrat_echeance_id
+        LEFT JOIN contrats_clients   cce ON cce.id = ce.contrat_client_id
+        WHERE v.user_id = ANY($1::uuid[]) OR cc.user_id = ANY($1::uuid[]) OR cce.user_id = ANY($1::uuid[])`,
         [ids, m, y]
+      ),
+
+      // Créances sur les contrats récurrents : une échéance mensuelle non soldée nette des
+      // versements déjà reçus, exactement comme pour les ventes (voir requêtes ci-dessus).
+      pool.query(`
+        SELECT
+          COALESCE(SUM(GREATEST(e.montant - COALESCE(ve.total_verse,0), 0)) FILTER (WHERE e.statut_paiement != 'Paye'), 0) AS total_creances,
+          COUNT(*) FILTER (WHERE e.statut_paiement != 'Paye' AND (e.montant - COALESCE(ve.total_verse,0)) > 0) AS nb_creances,
+          COALESCE(SUM(GREATEST(e.montant - COALESCE(ve.total_verse,0), 0)) FILTER (WHERE e.statut_paiement='En retard'), 0) AS montant_retard,
+          COUNT(*) FILTER (WHERE e.statut_paiement='En retard' AND (e.montant - COALESCE(ve.total_verse,0)) > 0) AS nb_retard,
+          COALESCE(SUM(GREATEST(e.montant - COALESCE(ve.total_verse,0), 0)) FILTER (WHERE e.statut_paiement='En cours'), 0) AS montant_encours,
+          COUNT(*) FILTER (WHERE e.statut_paiement='En cours' AND (e.montant - COALESCE(ve.total_verse,0)) > 0) AS nb_encours,
+          COALESCE(SUM(e.montant), 0) AS total_facture
+        FROM contrat_echeances e
+        JOIN contrats_clients cc ON cc.id = e.contrat_client_id
+        LEFT JOIN (SELECT contrat_echeance_id, SUM(montant) AS total_verse FROM versements GROUP BY contrat_echeance_id) ve
+          ON ve.contrat_echeance_id = e.id
+        WHERE cc.user_id = ANY($1::uuid[])`,
+        [ids]
       ),
 
       pool.query(`SELECT id, nom FROM users WHERE id = ANY($1::uuid[]) AND role='vendeur'`, [ids]),
@@ -156,6 +178,7 @@ router.get('/', async (req, res) => {
     const k = kpis.rows[0];
     const cr = creances.rows[0];
     const ver = versementsR.rows[0];
+    const ech = echeancesR.rows[0];
     const clientsStatut = {};
     clientsStatutR.rows.forEach(r => { clientsStatut[r.statut] = +r.nb; });
 
@@ -188,15 +211,17 @@ router.get('/', async (req, res) => {
         taux_atteinte: tauxAtteinte,
         marge_nette: margeNette,
         taux_marge_nette: caYTD > 0 ? Math.round(margeNette / caYTD * 100) : 0,
-        total_creances: +k.total_creances,
-        nb_creances: +k.nb_creances,
+        // Créances = ventes non soldées + échéances de contrats récurrents non soldées
+        // (chacune nette des versements déjà reçus).
+        total_creances: +k.total_creances + (+ech.total_creances),
+        nb_creances: +k.nb_creances + (+ech.nb_creances),
         pipeline_espere: +mv.pipeline_espere,
         pipeline_nb: +mv.pipeline_nb,
-        // Taux de recouvrement = versements réellement reçus / total facturé
+        // Taux de recouvrement = versements réellement reçus / total facturé (ventes + contrats)
         encaisse_mois:  +ver.encaisse_mois,
         encaisse_ytd:   +ver.encaisse_ytd,
-        taux_recouvrement: +k.total_facture > 0
-          ? Math.round(+ver.encaisse_total / +k.total_facture * 100)
+        taux_recouvrement: (+k.total_facture + (+ech.total_facture)) > 0
+          ? Math.round(+ver.encaisse_total / (+k.total_facture + (+ech.total_facture)) * 100)
           : null,
         clients_actifs: clientsStatut['Actif'] || 0,
         clients_prospects: clientsStatut['Prospect'] || 0,
@@ -204,10 +229,10 @@ router.get('/', async (req, res) => {
         clients_total: Object.values(clientsStatut).reduce((s, n) => s + n, 0),
       },
       creances: {
-        montant_retard: +cr.montant_retard,
-        nb_retard: +cr.nb_retard,
-        montant_encours: +cr.montant_encours,
-        nb_encours: +cr.nb_encours,
+        montant_retard: +cr.montant_retard + (+ech.montant_retard),
+        nb_retard: +cr.nb_retard + (+ech.nb_retard),
+        montant_encours: +cr.montant_encours + (+ech.montant_encours),
+        nb_encours: +cr.nb_encours + (+ech.nb_encours),
       },
       ca_mensuel: mensuel.rows.map(r => ({ annee: r.annee, mois: r.mois, ca: +r.ca })),
       top_clients: topClients.rows.map(r => ({ nom: r.nom, ca_total: +r.ca_total, nb_ventes: +r.nb_ventes })),
