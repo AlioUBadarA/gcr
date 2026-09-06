@@ -85,8 +85,8 @@ async function createRizierAccount(client, rizerieId, rizerieNom, manager) {
 
   const hash = await bcrypt.hash(email, 12);
   await client.query(
-    `INSERT INTO users (nom, email, password, rizerie, rizerie_id, role)
-     VALUES ($1, $2, $3, $4, $5, 'rizier')`,
+    `INSERT INTO users (nom, email, password, rizerie, rizerie_id, role, must_change_password)
+     VALUES ($1, $2, $3, $4, $5, 'rizier', TRUE)`,
     [manager.nom, email, hash, rizerieNom, rizerieId]
   );
   return { status: 'created', email };
@@ -102,8 +102,8 @@ async function createSupportAccount(client, person) {
 
   const hash = await bcrypt.hash(email, 12);
   await client.query(
-    `INSERT INTO users (nom, email, password, role)
-     VALUES ($1, $2, $3, 'support')`,
+    `INSERT INTO users (nom, email, password, role, must_change_password)
+     VALUES ($1, $2, $3, 'support', TRUE)`,
     [person.nom, email, hash]
   );
   return { status: 'created', email };
