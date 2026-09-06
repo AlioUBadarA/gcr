@@ -6,6 +6,8 @@ const { attachScopeIds } = require('../middleware/scope');
 const { requirePerm } = require('../middleware/permissions');
 const { findOrCreateClient } = require('./clients');
 const { isPositiveNumber, isNonNegativeNumber, isValidDate, maxLen } = require('../middleware/validate');
+const { enregistrerVersement } = require('../utils/versements');
+const { CONDITIONS_PAIEMENT, echeanceParDefaut, montantAttenduProchaineEcheance } = require('../utils/paiement');
 
 const router = express.Router();
 router.use(auth, attachScopeIds);
@@ -13,6 +15,18 @@ router.use(auth, attachScopeIds);
 // Doit matcher exactement la contrainte CHECK sur ventes.statut_paiement (gcr/db/schema.sql)
 const STATUTS = ['En cours','En retard','Paye'];
 const MODES   = ['Espèces','Virement','Chèque','Mobile Money'];
+
+// Ajoute le montant attendu à la prochaine échéance (dérivé des conditions de paiement et du
+// total déjà versé) à chaque ligne — voir demande "statut de vente : prochaine échéance
+// toujours visible".
+function withMontantAttendu(rows) {
+  return rows.map((r) => ({
+    ...r,
+    montant_attendu_prochaine_echeance: montantAttenduProchaineEcheance(
+      r.conditions_paiement, r.montant, r.total_verse || 0
+    ),
+  }));
+}
 
 // GET /api/ventes  (avec filtres)
 router.get('/', async (req, res) => {
@@ -55,7 +69,7 @@ router.get('/', async (req, res) => {
     params.push(+limit, +offset);
 
     const result = await pool.query(q, params);
-    res.json(result.rows);
+    res.json(withMontantAttendu(result.rows));
   } catch (err) {
     logger.error('GET ventes', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
@@ -65,7 +79,7 @@ router.get('/', async (req, res) => {
 // POST /api/ventes
 router.post('/', async (req, res) => {
   try {
-    const { client_id, client_nom, date_vente, produit, quantite, prix_unitaire, statut_paiement, date_echeance, mode, cout_unitaire, note, telephone } = req.body;
+    const { client_id, client_nom, date_vente, produit, quantite, prix_unitaire, statut_paiement, date_echeance, mode, cout_unitaire, note, telephone, conditions_paiement } = req.body;
     if (!client_nom || !date_vente || !produit || !quantite || !prix_unitaire)
       return res.status(400).json({ error: 'Champs requis : client_nom, date_vente, produit, quantite, prix_unitaire' });
     if (!isPositiveNumber(quantite))
@@ -81,9 +95,15 @@ router.post('/', async (req, res) => {
     if (statut_paiement && !STATUTS.includes(statut_paiement))
       return res.status(400).json({ error: 'statut_paiement invalide' });
     if (mode && !MODES.includes(mode)) return res.status(400).json({ error: 'Mode de paiement invalide' });
+    if (conditions_paiement && !CONDITIONS_PAIEMENT.includes(conditions_paiement))
+      return res.status(400).json({ error: 'conditions_paiement invalide' });
     if (!maxLen(client_nom, 200)) return res.status(400).json({ error: 'client_nom trop long (200 caracteres max)' });
     if (!maxLen(produit, 200))    return res.status(400).json({ error: 'produit trop long (200 caracteres max)' });
     if (!maxLen(note, 2000))      return res.status(400).json({ error: 'note trop longue (2000 caracteres max)' });
+
+    // L'échéance explicite prime toujours ; à défaut, elle se déduit des conditions de
+    // paiement (ex: J+30 → date_vente + 30 jours) plutôt que de rester vide.
+    const resolvedEcheance = date_echeance || (conditions_paiement ? echeanceParDefaut(conditions_paiement, date_vente) : null);
 
     // Rattache la vente à un client existant (ou le crée) pour garder le portefeuille à jour.
     let resolvedClientId = client_id || null;
@@ -99,14 +119,14 @@ router.post('/', async (req, res) => {
 
     const numero = await nextNumero('ventes', 'V', req.userId);
     const result = await pool.query(
-      `INSERT INTO ventes (user_id, client_id, client_nom, date_vente, produit, quantite, prix_unitaire, statut_paiement, date_echeance, mode, cout_unitaire, note, numero)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+      `INSERT INTO ventes (user_id, client_id, client_nom, date_vente, produit, quantite, prix_unitaire, statut_paiement, date_echeance, mode, cout_unitaire, note, numero, conditions_paiement)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
       [req.userId, resolvedClientId, client_nom.trim(), date_vente, produit,
        +quantite, +prix_unitaire, statut_paiement || 'En cours',
-       date_echeance || null, mode || null, cout_unitaire || 0, note || null, numero]
+       resolvedEcheance, mode || null, cout_unitaire || 0, note || null, numero, conditions_paiement || null]
     );
 
-    res.status(201).json(result.rows[0]);
+    res.status(201).json(withMontantAttendu(result.rows)[0]);
   } catch (err) {
     logger.error('POST ventes', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
@@ -135,7 +155,7 @@ router.get('/:id', async (req, res) => {
       ),
     ]);
     if (!venteR.rows.length) return res.status(404).json({ error: 'Vente non trouvee' });
-    res.json({ ...venteR.rows[0], versements: verR.rows });
+    res.json({ ...withMontantAttendu(venteR.rows)[0], versements: verR.rows });
   } catch (err) {
     res.status(500).json({ error: 'Erreur serveur' });
   }
@@ -146,12 +166,14 @@ router.get('/:id', async (req, res) => {
 // Directeur, rizier, support, superadmin : toute vente dans leur périmètre (scopeIds).
 router.put('/:id', async (req, res) => {
   try {
-    const { client_id, client_nom, date_vente, produit, quantite, prix_unitaire, statut_paiement, date_echeance, mode, cout_unitaire, note } = req.body;
+    const { client_id, client_nom, date_vente, produit, quantite, prix_unitaire, statut_paiement, date_echeance, mode, cout_unitaire, note, conditions_paiement } = req.body;
     if (!client_nom || !date_vente || !produit || !quantite || !prix_unitaire)
       return res.status(400).json({ error: 'Champs requis : client_nom, date_vente, produit, quantite, prix_unitaire' });
     if (statut_paiement && !STATUTS.includes(statut_paiement))
       return res.status(400).json({ error: 'Statut invalide' });
     if (mode && !MODES.includes(mode)) return res.status(400).json({ error: 'Mode de paiement invalide' });
+    if (conditions_paiement && !CONDITIONS_PAIEMENT.includes(conditions_paiement))
+      return res.status(400).json({ error: 'conditions_paiement invalide' });
     if (!isPositiveNumber(quantite))
       return res.status(400).json({ error: 'quantite doit etre un nombre positif' });
     if (!isPositiveNumber(prix_unitaire))
@@ -178,23 +200,23 @@ router.put('/:id', async (req, res) => {
 
     const ownerOnly = ['vendeur', 'manager'].includes(req.userRole);
     const filterClause = ownerOnly
-      ? 'user_id = $13'
-      : 'user_id = ANY($13::uuid[])';
+      ? 'user_id = $14'
+      : 'user_id = ANY($14::uuid[])';
     const filterParam = ownerOnly ? req.userId : req.scopeIds;
 
     const result = await pool.query(
       `UPDATE ventes SET
          client_id=$1, client_nom=$2, date_vente=$3, produit=$4,
          quantite=$5, prix_unitaire=$6, statut_paiement=$7,
-         date_echeance=$8, mode=$9, cout_unitaire=$10, note=$11
-       WHERE id=$12 AND ${filterClause} RETURNING *`,
+         date_echeance=$8, mode=$9, cout_unitaire=$10, note=$11, conditions_paiement=$12
+       WHERE id=$13 AND ${filterClause} RETURNING *`,
       [client_id || null, client_nom, date_vente, produit,
        +quantite, +prix_unitaire, statut_paiement,
-       date_echeance || null, mode || null, cout_unitaire || 0, note || null,
+       date_echeance || null, mode || null, cout_unitaire || 0, note || null, conditions_paiement || null,
        req.params.id, filterParam]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Vente non trouvee' });
-    res.json(result.rows[0]);
+    res.json(withMontantAttendu(result.rows)[0]);
   } catch (err) {
     res.status(500).json({ error: 'Erreur serveur' });
   }
@@ -250,34 +272,20 @@ router.post('/:id/versements', requirePerm('ventes:versement'), async (req, res)
       if (!venteR.rows.length) { const e = new Error('Vente non trouvee'); e.status = 404; throw e; }
       const vente = venteR.rows[0];
 
+      // Exclut les versements rejetés par le comptable : un rejet libère le montant pour
+      // permettre une nouvelle déclaration correcte (voir routes/comptabilite.js).
       const totalDejaR = await client.query(
-        'SELECT COALESCE(SUM(montant),0) AS total FROM versements WHERE vente_id=$1', [req.params.id]
+        `SELECT COALESCE(SUM(montant),0) AS total FROM versements
+         WHERE vente_id=$1 AND statut_validation != 'rejete'`, [req.params.id]
       );
       const totalDeja = +totalDejaR.rows[0].total;
-      const restant   = +vente.montant - totalDeja;
 
-      if (restant <= 0) { const e = new Error('Vente deja entierement payee'); e.status = 400; throw e; }
-      if (+montant > restant) {
-        const e = new Error(`Versement excessif : montant maximum autorise est ${restant}`);
-        e.status = 400; throw e;
-      }
-
-      const result = await client.query(
-        'INSERT INTO versements (vente_id, montant, mode, date) VALUES ($1,$2,$3,$4) RETURNING *',
-        [req.params.id, +montant, mode || null, date || new Date().toISOString().slice(0, 10)]
-      );
-
-      const newTotal = totalDeja + +montant;
-      let newStatut = null;
-      if (newTotal >= +vente.montant) {
-        newStatut = 'Paye';
-      } else if (!['En cours', 'Paye'].includes(vente.statut_paiement)) {
-        newStatut = 'En cours';
-      }
-      if (newStatut) {
-        await client.query('UPDATE ventes SET statut_paiement=$1 WHERE id=$2', [newStatut, req.params.id]);
-      }
-      return result.rows[0];
+      return enregistrerVersement(client, {
+        column: 'vente_id', targetId: req.params.id, montant, mode, date,
+        montantTotal: +vente.montant, totalDeja,
+        statutTable: 'ventes', statutActuel: vente.statut_paiement,
+        ownerUserId: vente.user_id, declaredBy: req.userId,
+      });
     });
 
     res.status(201).json(versement);

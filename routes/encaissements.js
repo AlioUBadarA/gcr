@@ -5,6 +5,7 @@ const auth = require('../middleware/auth');
 const { attachScopeIds } = require('../middleware/scope');
 const { requirePerm } = require('../middleware/permissions');
 const { isPositiveNumber, isValidDate } = require('../middleware/validate');
+const { enregistrerVersement } = require('../utils/versements');
 
 const router = express.Router();
 router.use(auth, attachScopeIds);
@@ -59,10 +60,12 @@ router.get('/search', async (req, res) => {
   }
 });
 
-// GET /api/encaissements/mois — somme de tous les versements encaissés ce mois (scope)
+// GET /api/encaissements/mois — somme de tous les versements validés encaissés ce mois (scope)
 router.get('/mois', async (req, res) => {
   try {
     const ids = req.scopeIds;
+    // Seuls les versements validés comptablement comptent (déclaré ≠ validé) — même règle
+    // que dashboard.js pour ne pas faire diverger les deux indicateurs.
     const result = await pool.query(
       `SELECT COALESCE(SUM(v.montant), 0) AS total
        FROM versements v
@@ -71,7 +74,8 @@ router.get('/mois', async (req, res) => {
        LEFT JOIN contrats_paddy    cp ON cp.id = v.contrat_paddy_id
        LEFT JOIN contrat_echeances ce ON ce.id = v.contrat_echeance_id
        LEFT JOIN contrats_clients  cce ON cce.id = ce.contrat_client_id
-       WHERE DATE_TRUNC('month', v.date::date) = DATE_TRUNC('month', CURRENT_DATE)
+       WHERE v.statut_validation = 'valide'
+         AND DATE_TRUNC('month', v.date::date) = DATE_TRUNC('month', CURRENT_DATE)
          AND (vt.user_id = ANY($1::uuid[]) OR cc.user_id = ANY($1::uuid[]) OR cp.user_id = ANY($1::uuid[]) OR cce.user_id = ANY($1::uuid[]))`,
       [ids]
     );
@@ -98,8 +102,11 @@ async function findOwnedTarget(queryable, type, id, ids, { forUpdate = false } =
   const target = targetTable(type);
   if (!target) return null;
   if (type === 'echeance') {
+    // owner_user_id (celui du contrat parent) sert à déterminer la rizerie pour le workflow
+    // de validation comptable (voir utils/versements.js) — l'échéance n'a pas de user_id propre.
     const r = await queryable.query(
-      `SELECT e.* FROM contrat_echeances e JOIN contrats_clients cc ON cc.id = e.contrat_client_id
+      `SELECT e.*, cc.user_id AS owner_user_id FROM contrat_echeances e
+       JOIN contrats_clients cc ON cc.id = e.contrat_client_id
        WHERE e.id=$1 AND cc.user_id = ANY($2::uuid[])${forUpdate ? ' FOR UPDATE OF e' : ''}`,
       [id, ids]
     );
@@ -145,48 +152,41 @@ router.post('/:type/:id/versements', requirePerm('encaissements:versement'), asy
 
     const ids = req.scopeIds;
 
-    // Ventes et échéances de contrat : transaction avec verrou pour éviter les race conditions
-    // (deux encaissements concurrents qui dépasseraient le montant dû), plafond au montant
-    // restant, et mise à jour automatique du statut de paiement.
-    if (['vente', 'echeance'].includes(req.params.type)) {
-      const statutTable = req.params.type === 'vente' ? 'ventes' : 'contrat_echeances';
+    // Ventes, échéances de contrat et contrats paddy : transaction avec verrou pour éviter
+    // les race conditions (deux encaissements concurrents qui dépasseraient le montant dû),
+    // plafond au montant restant, et mise à jour automatique du statut de paiement quand la
+    // cible en a un (paddy n'a pas de statut_paiement propre — seul le plafond s'applique).
+    if (['vente', 'echeance', 'paddy'].includes(req.params.type)) {
+      const statutTable = req.params.type === 'vente' ? 'ventes' : req.params.type === 'echeance' ? 'contrat_echeances' : null;
       const versement = await withTransaction(async (client) => {
         const row = await findOwnedTarget(client, req.params.type, req.params.id, ids, { forUpdate: true });
         if (!row) { const e = new Error('Transaction non trouvee'); e.status = 404; throw e; }
 
+        // Le paddy n'a pas de colonne montant : le total du contrat se déduit de quantite_kg *
+        // prix_kg, sur le même principe que la colonne générée `montant` des ventes.
+        const montantTotal = req.params.type === 'paddy' ? (+row.quantite_kg * +row.prix_kg) : +row.montant;
+
+        // Exclut les versements rejetés par le comptable : un rejet libère le montant pour
+        // permettre une nouvelle déclaration correcte.
         const totalDejaR = await client.query(
-          `SELECT COALESCE(SUM(montant),0) AS total FROM versements WHERE ${target.column}=$1`, [req.params.id]
+          `SELECT COALESCE(SUM(montant),0) AS total FROM versements
+           WHERE ${target.column}=$1 AND statut_validation != 'rejete'`, [req.params.id]
         );
         const totalDeja = +totalDejaR.rows[0].total;
-        const restant   = +row.montant - totalDeja;
 
-        if (restant <= 0) { const e = new Error('Déjà entièrement payé'); e.status = 400; throw e; }
-        if (+montant > restant) {
-          const e = new Error(`Versement excessif : montant maximum autorise est ${restant}`);
-          e.status = 400; throw e;
-        }
-
-        const result = await client.query(
-          `INSERT INTO versements (${target.column}, montant, mode, date) VALUES ($1,$2,$3,$4) RETURNING *`,
-          [req.params.id, +montant, mode || null, date || new Date().toISOString().slice(0, 10)]
-        );
-
-        const newTotal = totalDeja + +montant;
-        let newStatut = null;
-        if (newTotal >= +row.montant) {
-          newStatut = 'Paye';
-        } else if (!['En cours', 'Paye'].includes(row.statut_paiement)) {
-          newStatut = 'En cours';
-        }
-        if (newStatut) {
-          await client.query(`UPDATE ${statutTable} SET statut_paiement=$1 WHERE id=$2`, [newStatut, req.params.id]);
-        }
-        return result.rows[0];
+        return enregistrerVersement(client, {
+          column: target.column, targetId: req.params.id, montant, mode, date,
+          montantTotal, totalDeja, statutTable, statutActuel: row.statut_paiement,
+          ownerUserId: row.owner_user_id || row.user_id, declaredBy: req.userId,
+        });
       });
       return res.status(201).json(versement);
     }
 
-    // Contrat (ancien modèle, conservé pour compat) et paddy : pas de plafond ni de statut.
+    // Contrat client "ancien modèle" (montant mensuel récurrent, sans total de contrat
+    // stocké — remplacé par l'échéancier `contrat_echeances` pour tout nouveau contrat) :
+    // pas de plafond possible faute de montant total de référence. Conservé pour compat API,
+    // non utilisé par le frontend actuel (qui passe toujours par le type 'echeance').
     const owns = await findOwnedTarget(pool, req.params.type, req.params.id, ids);
     if (!owns) return res.status(404).json({ error: 'Transaction non trouvee' });
 
@@ -248,7 +248,8 @@ router.delete('/versements/:id', requirePerm('encaissements:versement'), async (
         if (rowR.rows.length) {
           const row = rowR.rows[0];
           const totalR = await client.query(
-            `SELECT COALESCE(SUM(montant),0) AS total FROM versements WHERE ${cible.column}=$1`, [cible.id]
+            `SELECT COALESCE(SUM(montant),0) AS total FROM versements
+             WHERE ${cible.column}=$1 AND statut_validation != 'rejete'`, [cible.id]
           );
           const total = +totalR.rows[0].total;
           // 'En cours' que le total retombe à 0 ou reste partiel — 'Non payé' n'est pas une

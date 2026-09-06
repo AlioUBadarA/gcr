@@ -1,5 +1,5 @@
 // Source de vérité des autorisations. Toute vérification de rôle passe par ici.
-const VALID_ROLES = new Set(['vendeur', 'manager', 'directeur', 'rizier', 'support', 'superadmin']);
+const VALID_ROLES = new Set(['vendeur', 'manager', 'directeur', 'rizier', 'support', 'superadmin', 'comptable']);
 
 // Matrice role × action. Ajouter ici pour étendre, jamais dans les routes.
 const PERMISSIONS = {
@@ -8,6 +8,9 @@ const PERMISSIONS = {
   'ventes:statut':            ['manager', 'directeur', 'rizier', 'support', 'superadmin'],
   'encaissements:versement':  ['manager', 'directeur', 'rizier', 'support', 'superadmin'],
   'pilotage:access':          ['manager', 'directeur', 'rizier'],
+  // Le comptable valide/rejette les encaissements déclarés par le commercial (voir
+  // routes/comptabilite.js). Le superadmin garde un accès de secours (support/debug).
+  'encaissements:valider':    ['comptable', 'superadmin'],
 };
 
 /**

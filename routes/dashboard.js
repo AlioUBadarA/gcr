@@ -3,6 +3,7 @@ const { pool } = require('../db/pool');
 const logger = require('../utils/logger');
 const auth = require('../middleware/auth');
 const { getScopeIds } = require('../middleware/scope');
+const { projectionAnnuelle, tauxAtteinte: computeTauxAtteinte, COUT_FALLBACK_PCT } = require('../utils/kpi');
 
 const router = express.Router();
 router.use(auth);
@@ -30,7 +31,11 @@ router.get('/', async (req, res) => {
           COUNT(*) FILTER (WHERE EXTRACT(MONTH FROM v.date_vente)=$2 AND EXTRACT(YEAR FROM v.date_vente)=$3) AS nb_ventes_mois,
           COALESCE(SUM(v.montant) FILTER (WHERE EXTRACT(YEAR FROM v.date_vente)=$3), 0) AS ca_ytd,
           COUNT(*) FILTER (WHERE EXTRACT(YEAR FROM v.date_vente)=$3) AS nb_ventes_ytd,
-          COALESCE(SUM(v.quantite*COALESCE(NULLIF(v.cout_unitaire,0),0)) FILTER (WHERE EXTRACT(YEAR FROM v.date_vente)=$3), 0) AS cout_ytd,
+          -- Coût réel s'il est renseigné, sinon estimé à COUT_FALLBACK_PCT % du CA — même
+          -- formule et même valeur par défaut que la page Rentabilité (COUT_LIGNE), pour ne
+          -- pas afficher une marge nette artificiellement gonflée quand cout_unitaire est vide.
+          COALESCE(SUM(CASE WHEN v.cout_unitaire > 0 THEN v.quantite*v.cout_unitaire ELSE v.montant * $4::numeric / 100 END)
+                   FILTER (WHERE EXTRACT(YEAR FROM v.date_vente)=$3), 0) AS cout_ytd,
           -- Créance = reste à payer (montant - versements déjà reçus), pas le montant brut de la facture
           COALESCE(SUM(GREATEST(v.montant - COALESCE(ve.total_verse,0), 0)) FILTER (WHERE v.statut_paiement != 'Paye'), 0) AS total_creances,
           COUNT(*) FILTER (WHERE v.statut_paiement != 'Paye' AND (v.montant - COALESCE(ve.total_verse,0)) > 0) AS nb_creances,
@@ -38,7 +43,7 @@ router.get('/', async (req, res) => {
         FROM ventes v
         LEFT JOIN (SELECT vente_id, SUM(montant) AS total_verse FROM versements GROUP BY vente_id) ve ON ve.vente_id = v.id
         WHERE v.user_id = ANY($1::uuid[])`,
-        [ids, m, y]
+        [ids, m, y, COUT_FALLBACK_PCT]
       ),
 
       pool.query(`
@@ -113,8 +118,13 @@ router.get('/', async (req, res) => {
         [ids, y]
       ),
 
-      // Encaissements réels : versements sur ventes, contrats clients (ancien modèle) ET
-      // échéances de contrat (nouveau modèle, mois par mois) — par date de versement.
+      // Encaissements réels : versements sur ventes, contrats clients (ancien modèle),
+      // échéances de contrat (nouveau modèle, mois par mois) ET contrats paddy — par date de
+      // versement. Les 4 cibles possibles de `versements` doivent toutes être couvertes ici,
+      // sous peine de sous-compter l'encaissé par rapport à GET /api/encaissements/mois.
+      // Seuls les versements validés comptablement comptent dans cet indicateur officiel
+      // (déclaré ≠ validé — voir routes/comptabilite.js) ; sans comptable actif sur la
+      // rizerie, tout est auto-validé à la déclaration, donc rien ne change dans ce cas.
       pool.query(`
         SELECT
           COALESCE(SUM(ver.montant) FILTER (WHERE EXTRACT(MONTH FROM ver.date)=$2 AND EXTRACT(YEAR FROM ver.date)=$3), 0) AS encaisse_mois,
@@ -123,9 +133,12 @@ router.get('/', async (req, res) => {
         FROM versements ver
         LEFT JOIN ventes             v   ON v.id   = ver.vente_id
         LEFT JOIN contrats_clients   cc  ON cc.id  = ver.contrat_client_id
+        LEFT JOIN contrats_paddy     cp  ON cp.id  = ver.contrat_paddy_id
         LEFT JOIN contrat_echeances  ce  ON ce.id  = ver.contrat_echeance_id
         LEFT JOIN contrats_clients   cce ON cce.id = ce.contrat_client_id
-        WHERE v.user_id = ANY($1::uuid[]) OR cc.user_id = ANY($1::uuid[]) OR cce.user_id = ANY($1::uuid[])`,
+        WHERE ver.statut_validation = 'valide'
+          AND (v.user_id = ANY($1::uuid[]) OR cc.user_id = ANY($1::uuid[])
+           OR cp.user_id = ANY($1::uuid[]) OR cce.user_id = ANY($1::uuid[]))`,
         [ids, m, y]
       ),
 
@@ -185,17 +198,15 @@ router.get('/', async (req, res) => {
     const caYTD = +k.ca_ytd;
     const objAnnuel = +objAnnuelR.rows[0].obj;
     const margeNette = caYTD - (+k.cout_ytd);
-    const projectionAnnuel = Math.round(caYTD / monthsElapsed * 12);
-    const prorat = objAnnuel / 12 * monthsElapsed;
-    const tauxAtteinte = prorat > 0 ? caYTD / prorat * 100 : 0;
+    const projectionAnnuel = projectionAnnuelle(caYTD, monthsElapsed);
+    const tauxAtteinte = computeTauxAtteinte(caYTD, objAnnuel, monthsElapsed);
 
     const caVendeurMap = {}; ventesVendeurR.rows.forEach(r => { caVendeurMap[r.user_id] = +r.ca; });
     const objVendeurMap = {}; forecastVendeurR.rows.forEach(r => { objVendeurMap[r.user_id] = +r.obj; });
     const atteinte_vendeurs = vendeursR.rows.map(v => {
       const ca = caVendeurMap[v.id] || 0;
       const obj = objVendeurMap[v.id] || 0;
-      const p = obj / 12 * monthsElapsed;
-      return { id: v.id, nom: v.nom, taux_atteinte: p > 0 ? ca / p * 100 : 0 };
+      return { id: v.id, nom: v.nom, taux_atteinte: computeTauxAtteinte(ca, obj, monthsElapsed) };
     }).sort((a, b) => b.taux_atteinte - a.taux_atteinte);
 
     const mv = mouvementsR.rows[0];

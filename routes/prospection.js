@@ -11,6 +11,19 @@ router.use(auth);
 const STATUTS   = ['Nouveau','Qualifié','Proposition','Négociation','Gagné','Perdu'];
 const PRIORITES = ['Haute','Normale','Basse'];
 
+// Résout le client lié à un prospect passé "Gagné". Si la conversion a déjà eu lieu
+// (prospect.client_id renseigné), réutilise ce même client au lieu de rechercher à nouveau
+// par nom/téléphone — évite un risque de doublon si le nom a légèrement changé entretemps.
+async function resolveClientConverti(prospect, userId) {
+  if (prospect.client_id) {
+    const existing = await pool.query('SELECT * FROM clients WHERE id=$1', [prospect.client_id]);
+    if (existing.rows.length) return existing.rows[0];
+  }
+  const client = await findOrCreateClient(userId, prospect.nom, prospect.telephone, prospect.type_client);
+  await pool.query('UPDATE prospection SET client_id=$1 WHERE id=$2', [client.id, prospect.id]);
+  return client;
+}
+
 // GET /api/prospection
 router.get('/', async (req, res) => {
   try {
@@ -89,7 +102,7 @@ router.put('/:id', async (req, res) => {
 
     let client_converti = null;
     if (prospect.statut === 'Gagné') {
-      client_converti = await findOrCreateClient(req.userId, prospect.nom, prospect.telephone, prospect.type_client);
+      client_converti = await resolveClientConverti(prospect, req.userId);
     }
 
     res.json({ ...prospect, client_converti });
@@ -114,7 +127,7 @@ router.patch('/:id/statut', async (req, res) => {
 
     let client_converti = null;
     if (statut === 'Gagné') {
-      client_converti = await findOrCreateClient(req.userId, prospect.nom, prospect.telephone, prospect.type_client);
+      client_converti = await resolveClientConverti(prospect, req.userId);
     }
 
     res.json({ ...prospect, client_converti });

@@ -3,6 +3,7 @@ const { pool } = require('../db/pool');
 const logger = require('../utils/logger');
 const auth = require('../middleware/auth');
 const { attachScopeIds } = require('../middleware/scope');
+const { projectionAnnuelle, tauxAtteinte: computeTauxAtteinte, objectifProrata, COUT_FALLBACK_PCT } = require('../utils/kpi');
 
 const router = express.Router();
 router.use(auth, attachScopeIds);
@@ -34,10 +35,10 @@ router.get('/', async (req, res) => {
       const [ventesR, forecastR, creancesR] = await Promise.all([
         pool.query(
           `SELECT user_id, COALESCE(SUM(montant),0) AS ca,
-                  COALESCE(SUM(quantite*COALESCE(NULLIF(cout_unitaire,0),0)),0) AS cout
+                  COALESCE(SUM(CASE WHEN cout_unitaire > 0 THEN quantite*cout_unitaire ELSE montant * $3::numeric / 100 END),0) AS cout
            FROM ventes WHERE user_id = ANY($1::uuid[]) AND EXTRACT(YEAR FROM date_vente)=$2
            GROUP BY user_id`,
-          [vendeurIds, annee]
+          [vendeurIds, annee, COUT_FALLBACK_PCT]
         ),
         pool.query(
           `SELECT user_id, COALESCE(SUM(objectif_montant),0) AS obj
@@ -65,9 +66,9 @@ router.get('/', async (req, res) => {
       const objAnnuel = objMap[v.id] || 0;
       const marge = ca - cout;
       const creances = creancesMap[v.id] || 0;
-      const prorat = objAnnuel / 12 * monthsElapsed;
-      const tauxAtteinte = prorat > 0 ? ca / prorat * 100 : 0;
-      const forecast = Math.round(ca / monthsElapsed * 12);
+      const prorat = objectifProrata(objAnnuel, monthsElapsed);
+      const tauxAtteinte = computeTauxAtteinte(ca, objAnnuel, monthsElapsed);
+      const forecast = projectionAnnuelle(ca, monthsElapsed);
       const ecart = ca - prorat;
       return { id: v.id, nom: v.nom, manager_id: v.parent_id, ca_ytd: ca, obj_annuel: objAnnuel, marge, creances, taux_atteinte: tauxAtteinte, forecast, ecart };
     });
@@ -79,8 +80,7 @@ router.get('/', async (req, res) => {
       const marge = team.reduce((s, v) => s + v.marge, 0);
       const creances = team.reduce((s, v) => s + v.creances, 0);
       const forecast = team.reduce((s, v) => s + v.forecast, 0);
-      const prorat = obj_annuel / 12 * monthsElapsed;
-      const taux_atteinte = prorat > 0 ? ca_ytd / prorat * 100 : 0;
+      const taux_atteinte = computeTauxAtteinte(ca_ytd, obj_annuel, monthsElapsed);
       return { id: mg.id, nom: mg.nom, zone: mg.zone, nb_com: team.length, ca_ytd, obj_annuel, forecast, marge, creances, taux_atteinte, team };
     });
 

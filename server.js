@@ -61,6 +61,7 @@ app.use('/api/produits',    require('./routes/produits'));
 app.use('/api/activites',   require('./routes/activites'));
 app.use('/api/journal',     require('./routes/journal'));
 app.use('/api/encaissements', require('./routes/encaissements'));
+app.use('/api/comptabilite', require('./routes/comptabilite'));
 
 // ── 404 ───────────────────────────────────────────────────────
 app.use((req, res) => {

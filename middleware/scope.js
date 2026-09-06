@@ -3,6 +3,19 @@ const { pool } = require('../db/pool');
 async function getScopeIds(userId, role) {
   if (role === 'vendeur') return [userId];
 
+  // Le comptable n'appartient pas à la hiérarchie commerciale (parent_id) : son périmètre
+  // est toute la rizerie à laquelle il est rattaché, pour pouvoir valider les encaissements
+  // déclarés par n'importe quel commercial de cette rizerie.
+  if (role === 'comptable') {
+    const r = await pool.query(
+      `SELECT id FROM users
+       WHERE rizerie_id = (SELECT rizerie_id FROM users WHERE id=$1)
+         AND role IN ('rizier','directeur','manager','vendeur')`,
+      [userId]
+    );
+    return r.rows.map(x => x.id);
+  }
+
   if (role === 'manager') {
     const r = await pool.query(
       "SELECT id FROM users WHERE parent_id = $1 AND role = 'vendeur'",

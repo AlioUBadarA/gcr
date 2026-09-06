@@ -1,15 +1,14 @@
 const express = require('express');
-const bcrypt  = require('bcryptjs');
 const { pool, withTransaction } = require('../db/pool');
 const logger  = require('../utils/logger');
 const auth = require('../middleware/auth');
 const { isNonNegativeNumber, isValidDate, maxLen } = require('../middleware/validate');
+const { peutCreerRole, createComptePlateforme } = require('../utils/comptes');
 
 const router = express.Router();
 router.use(auth);
 
 const TYPES = ['CDI','CDD','Temps partiel','Stage','Journalier'];
-const ROLES_PLATEFORME = ['vendeur','manager','directeur'];
 
 // GET /api/emplois
 router.get('/', async (req, res) => {
@@ -62,45 +61,25 @@ router.post('/', async (req, res) => {
     if (!maxLen(nom, 200))   return res.status(400).json({ error: 'nom trop long (200 caracteres max)' });
     if (!maxLen(note, 2000)) return res.status(400).json({ error: 'note trop longue (2000 caracteres max)' });
 
-    let userAccountId = null;
-
-    if (role_plateforme) {
-      if (!ROLES_PLATEFORME.includes(role_plateforme))
-        return res.status(400).json({ error: 'Rôle plateforme invalide (vendeur, manager, directeur)' });
-
-      // Seul directeur/rizier peut créer des comptes ; manager peut créer vendeur uniquement
-      const peutCreer = ['rizier', 'directeur'].includes(req.userRole)
-        || (req.userRole === 'manager' && role_plateforme === 'vendeur');
-      if (!peutCreer)
-        return res.status(403).json({ error: 'Vous n\'avez pas le droit de créer ce type de compte' });
-
-      if (!email)
-        return res.status(400).json({ error: 'Email requis pour créer un compte plateforme' });
-      if (!password || password.length < 12)
-        return res.status(400).json({ error: 'Mot de passe : 12 caractères minimum' });
-
-      const exists = await pool.query('SELECT id FROM users WHERE email=$1', [email.toLowerCase()]);
-      if (exists.rows.length) return res.status(409).json({ error: 'Cet email est déjà utilisé' });
+    // Même matrice de permissions que routes/equipe.js (utils/comptes.js) : un directeur ne
+    // peut pas créer un autre directeur, réservé au rizier.
+    if (role_plateforme && !peutCreerRole(req.userRole, role_plateforme)) {
+      return res.status(403).json({ error: 'Vous n\'avez pas le droit de créer ce type de compte' });
     }
 
     const periodeVal = ['Avant RIZAO', 'Avec RIZAO'].includes(periode_rizao) ? periode_rizao : 'Avec RIZAO';
 
-    // Création atomique : compte plateforme + fiche employé dans la même transaction
+    // Création atomique : compte plateforme + fiche employé dans la même transaction.
+    // Le compte est créé via le même point d'entrée que routes/equipe.js (createComptePlateforme)
+    // pour ne pas faire diverger la logique de création de compte entre les deux modules.
     const emploi = await withTransaction(async (client) => {
       let accountId = null;
       if (role_plateforme) {
-        const creatorR = await client.query(
-          'SELECT rizerie_id, rizerie FROM users WHERE id=$1', [req.userId]
-        );
-        const creator = creatorR.rows[0] || {};
-        const hash = await bcrypt.hash(password, 12);
-        const userR = await client.query(
-          `INSERT INTO users (nom, email, password, role, parent_id, rizerie_id, rizerie)
-           VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
-          [nom.trim(), email.toLowerCase().trim(), hash, role_plateforme,
-           req.userId, creator.rizerie_id || null, creator.rizerie || null]
-        );
-        accountId = userR.rows[0].id;
+        const user = await createComptePlateforme(client, {
+          nom, email, password, role: role_plateforme, telephone,
+          parentId: req.userId, creatorId: req.userId,
+        });
+        accountId = user.id;
       }
       const r = await client.query(
         `INSERT INTO emplois
@@ -115,6 +94,7 @@ router.post('/', async (req, res) => {
     });
     res.status(201).json(emploi);
   } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
     logger.error('POST emplois', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
@@ -133,17 +113,29 @@ router.put('/:id', async (req, res) => {
     if (!maxLen(nom, 200))   return res.status(400).json({ error: 'nom trop long (200 caracteres max)' });
     if (!maxLen(note, 2000)) return res.status(400).json({ error: 'note trop longue (2000 caracteres max)' });
     const periodeVal = ['Avant RIZAO', 'Avec RIZAO'].includes(periode_rizao) ? periode_rizao : 'Avec RIZAO';
-    const result = await pool.query(
-      `UPDATE emplois SET nom=$1, poste=$2, type_contrat=$3, date_embauche=$4,
-         salaire=$5, telephone=$6, note=$7, periode_rizao=$8
-       WHERE id=$9 AND user_id=$10 RETURNING *`,
-      [nom, poste || null, type_contrat || 'CDI', date_embauche || null,
-       salaire || null, telephone || null, note || null, periodeVal,
-       req.params.id, req.userId]
-    );
-    if (!result.rows.length) return res.status(404).json({ error: 'Employé non trouvé' });
-    res.json(result.rows[0]);
+    const result = await withTransaction(async (client) => {
+      const r = await client.query(
+        `UPDATE emplois SET nom=$1, poste=$2, type_contrat=$3, date_embauche=$4,
+           salaire=$5, telephone=$6, note=$7, periode_rizao=$8
+         WHERE id=$9 AND user_id=$10 RETURNING *`,
+        [nom, poste || null, type_contrat || 'CDI', date_embauche || null,
+         salaire || null, telephone || null, note || null, periodeVal,
+         req.params.id, req.userId]
+      );
+      // Le nom et le téléphone du compte plateforme lié (s'il existe) suivent la fiche
+      // emploi, pour ne pas laisser diverger les deux enregistrements créés ensemble.
+      if (r.rows.length && r.rows[0].user_account_id) {
+        await client.query(
+          `UPDATE users SET nom=$1, telephone=$2 WHERE id=$3`,
+          [nom, telephone || null, r.rows[0].user_account_id]
+        );
+      }
+      return r.rows[0];
+    });
+    if (!result) return res.status(404).json({ error: 'Employé non trouvé' });
+    res.json(result);
   } catch (err) {
+    logger.error('PUT emplois', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });

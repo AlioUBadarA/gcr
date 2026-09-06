@@ -368,6 +368,54 @@ async function runMigrations() {
        ALTER TABLE versements ADD CONSTRAINT versements_one_target_check
          CHECK (num_nonnulls(vente_id, contrat_client_id, contrat_paddy_id, contrat_echeance_id) = 1);
      EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
+    // Lien persistant vers le client créé lors de la conversion d'un prospect "Gagné" — évite
+    // de rechercher à nouveau par nom/téléphone à chaque sauvegarde (risque de doublon si le
+    // nom a légèrement changé entretemps).
+    `ALTER TABLE prospection ADD COLUMN IF NOT EXISTS client_id UUID REFERENCES clients(id) ON DELETE SET NULL`,
+    // ── Rôle comptable ──────────────────────────────────────────
+    `DO $$
+     DECLARE c TEXT;
+     BEGIN
+       SELECT conname INTO c FROM pg_constraint
+       WHERE conrelid = 'users'::regclass AND contype = 'c'
+         AND pg_get_constraintdef(oid) LIKE '%role%' LIMIT 1;
+       IF c IS NOT NULL THEN EXECUTE format('ALTER TABLE users DROP CONSTRAINT %I', c); END IF;
+       BEGIN
+         ALTER TABLE users ADD CONSTRAINT users_role_check
+           CHECK (role IN ('rizier','superadmin','vendeur','support','manager','directeur','comptable'));
+       EXCEPTION WHEN duplicate_object THEN NULL; END;
+     END $$`,
+    // Traçabilité déclaré → validé sur chaque versement (voir routes/comptabilite.js et
+    // utils/versements.js). Défaut 'valide' : tous les versements déjà en base (créés avant
+    // l'existence du rôle comptable) restent pris en compte sans rien changer à l'existant.
+    `ALTER TABLE versements ADD COLUMN IF NOT EXISTS statut_validation VARCHAR(20) NOT NULL DEFAULT 'valide'`,
+    `DO $$ BEGIN
+       ALTER TABLE versements ADD CONSTRAINT versements_statut_validation_check
+         CHECK (statut_validation IN ('declare','valide','rejete'));
+     EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
+    `ALTER TABLE versements ADD COLUMN IF NOT EXISTS valide_par UUID REFERENCES users(id) ON DELETE SET NULL`,
+    `ALTER TABLE versements ADD COLUMN IF NOT EXISTS valide_at TIMESTAMPTZ`,
+    `ALTER TABLE versements ADD COLUMN IF NOT EXISTS motif_rejet TEXT`,
+    `ALTER TABLE versements ADD COLUMN IF NOT EXISTS declare_par UUID REFERENCES users(id) ON DELETE SET NULL`,
+    `CREATE INDEX IF NOT EXISTS idx_versements_statut_validation ON versements(statut_validation)`,
+    // Conditions de paiement structurées sur une vente (au lieu du seul champ note en texte
+    // libre) — alimente le calcul de l'échéance par défaut et du montant attendu à la
+    // prochaine échéance (voir gcr/utils/paiement.js). Nullable : une vente existante sans
+    // condition renseignée reste valide.
+    `ALTER TABLE ventes ADD COLUMN IF NOT EXISTS conditions_paiement VARCHAR(40)`,
+    `DO $$ BEGIN
+       ALTER TABLE ventes ADD CONSTRAINT ventes_conditions_paiement_check
+         CHECK (conditions_paiement IS NULL OR conditions_paiement IN (
+           'Comptant','J+15','J+30','50% comptant / 50% J+15','50% comptant / 50% J+30'
+         ));
+     EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
+    // Comptes seed (rizier/support) créés avec mot de passe = email et sans changement
+    // forcé : force le changement au prochain login, mais uniquement pour les comptes qui
+    // ont encore ce mot de passe par défaut (ne touche pas ceux déjà changés par leur titulaire).
+    `UPDATE users SET must_change_password = TRUE
+     WHERE role IN ('rizier','support')
+       AND must_change_password = FALSE
+       AND password = crypt(LOWER(email), password)`,
   ];
 
   for (let i = 0; i < migrations.length; i++) {
@@ -429,11 +477,44 @@ async function withTransaction(fn) {
   }
 }
 
-// Rattache les ventes/clients d'un vendeur supprimé à son rizier parent,
-// pour ne pas perdre l'historique commercial (au lieu du cascade delete).
-async function reassignVendeurData(client, vendeurId, parentId) {
-  await client.query('UPDATE ventes SET user_id=$1 WHERE user_id=$2', [parentId, vendeurId]);
-  await client.query('UPDATE clients SET user_id=$1 WHERE user_id=$2', [parentId, vendeurId]);
+// Rattache les données métier d'un compte supprimé (ventes, clients, emplois, contrats,
+// prospection, activités, produits) à un autre compte (généralement son parent
+// hiérarchique), pour ne pas perdre l'historique commercial au lieu d'un cascade delete.
+// Utilisable pour un vendeur, un manager ou un directeur (tout rôle avec un destinataire).
+async function reassignUserData(client, fromUserId, toUserId) {
+  await client.query('UPDATE ventes SET user_id=$1 WHERE user_id=$2', [toUserId, fromUserId]);
+  await client.query('UPDATE clients SET user_id=$1 WHERE user_id=$2', [toUserId, fromUserId]);
+  await client.query('UPDATE emplois SET user_id=$1 WHERE user_id=$2', [toUserId, fromUserId]);
+  await client.query('UPDATE contrats_clients SET user_id=$1 WHERE user_id=$2', [toUserId, fromUserId]);
+  await client.query('UPDATE contrats_paddy SET user_id=$1 WHERE user_id=$2', [toUserId, fromUserId]);
+  await client.query('UPDATE prospection SET user_id=$1 WHERE user_id=$2', [toUserId, fromUserId]);
+  await client.query('UPDATE activites SET user_id=$1 WHERE user_id=$2', [toUserId, fromUserId]);
+  // produits a une contrainte UNIQUE(user_id, ref) : on ne réassigne que les références
+  // qui n'existent pas déjà chez le destinataire ; les doublons restants seront supprimés
+  // en cascade avec le compte (perte limitée à des doublons de catalogue).
+  await client.query(
+    `UPDATE produits p SET user_id=$1
+     WHERE p.user_id=$2
+       AND NOT EXISTS (SELECT 1 FROM produits p2 WHERE p2.user_id=$1 AND p2.ref = p.ref)`,
+    [toUserId, fromUserId]
+  );
+}
+
+// Indique si un compte porte encore des données métier propres. Sert à bloquer la
+// suppression d'un compte racine (rizier) qui n'a pas de parent vers qui réassigner.
+async function hasOwnBusinessData(userId) {
+  const { rows } = await pool.query(
+    `SELECT
+       (SELECT COUNT(*) FROM ventes WHERE user_id=$1)           AS ventes,
+       (SELECT COUNT(*) FROM clients WHERE user_id=$1)          AS clients,
+       (SELECT COUNT(*) FROM emplois WHERE user_id=$1)          AS emplois,
+       (SELECT COUNT(*) FROM contrats_clients WHERE user_id=$1) AS contrats_clients,
+       (SELECT COUNT(*) FROM contrats_paddy WHERE user_id=$1)   AS contrats_paddy,
+       (SELECT COUNT(*) FROM prospection WHERE user_id=$1)      AS prospection,
+       (SELECT COUNT(*) FROM produits WHERE user_id=$1)         AS produits`,
+    [userId]
+  );
+  return Object.values(rows[0]).some((n) => Number(n) > 0);
 }
 
 // Génère un numéro de transaction unique par rizerie (ex: V-2026-0007).
@@ -465,4 +546,4 @@ async function nextNumero(table, prefix, userId) {
   return `${prefix}-${year}-${String(rows[0].last_val).padStart(4, '0')}`;
 }
 
-module.exports = { pool, initSchema, runMigrations, withTransaction, reassignVendeurData, nextNumero };
+module.exports = { pool, initSchema, runMigrations, withTransaction, reassignUserData, hasOwnBusinessData, nextNumero };

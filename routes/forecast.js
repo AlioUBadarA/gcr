@@ -4,6 +4,7 @@ const logger = require('../utils/logger');
 const auth = require('../middleware/auth');
 const { getScopeIds } = require('../middleware/scope');
 const { isNonNegativeNumber } = require('../middleware/validate');
+const { projectionAnnuelle } = require('../utils/kpi');
 
 const router = express.Router();
 router.use(auth);
@@ -85,7 +86,7 @@ router.get('/', async (req, res) => {
     const par_vendeur = vendeursR.rows.map(v => {
       const ca = caVendeurMap[v.id] || 0;
       const objectif = objVendeurMap[v.id] || 0;
-      const forecast = Math.round(ca / monthsElapsed * 12);
+      const forecast = projectionAnnuelle(ca, monthsElapsed);
       return {
         id: v.id, nom: v.nom, ca_ytd: ca, objectif, forecast,
         ecart: forecast - objectif,
@@ -104,13 +105,13 @@ router.get('/', async (req, res) => {
     const totalRealiseYTD = months.filter(mm => mm.mois <= monthsElapsed).reduce((s, mm) => s + mm.realise, 0);
     const objectifAnnuelTotal = months.reduce((s, mm) => s + mm.objectif, 0);
     const contractualiseAnnuelTotal = months.reduce((s, mm) => s + mm.contractualise, 0);
-    const projectionAnnuelle = Math.round(totalRealiseYTD / monthsElapsed * 12);
+    const projectionAnnuelleGlobale = projectionAnnuelle(totalRealiseYTD, monthsElapsed);
 
     res.json({
       annee, months, par_vendeur, quarterly,
       objectif_annuel: objectifAnnuelTotal,
       contractualise_annuel: contractualiseAnnuelTotal,
-      projection_annuelle: projectionAnnuelle,
+      projection_annuelle: projectionAnnuelleGlobale,
     });
   } catch (err) {
     logger.error('GET forecast', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });

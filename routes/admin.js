@@ -1,7 +1,9 @@
 const express = require('express');
 const bcrypt  = require('bcryptjs');
 const jwt     = require('jsonwebtoken');
-const { pool, withTransaction, reassignVendeurData } = require('../db/pool');
+const { pool, withTransaction, reassignUserData, hasOwnBusinessData } = require('../db/pool');
+const { createComptePlateforme } = require('../utils/comptes');
+const { log } = require('../utils/audit');
 const logger  = require('../utils/logger');
 const { isValidUUID } = require('../middleware/validate');
 const auth    = require('../middleware/auth');
@@ -10,20 +12,6 @@ const { requireSuperadmin } = isAdmin;
 
 const router = express.Router();
 router.use(auth, isAdmin);
-
-// ── Helper audit ──────────────────────────────────────────────
-async function log(actorId, actorNom, action, target, detail, ip) {
-  try {
-    await pool.query(
-      `INSERT INTO audit_logs (actor_id, actor_nom, action, target_id, target_nom, detail, ip)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-      [actorId, actorNom, action, target?.id || null, target?.nom || null,
-       detail ? JSON.stringify(detail) : null, ip || null]
-    );
-  } catch (e) {
-    logger.error('audit log error', { err: e.message, stack: e.stack });
-  }
-}
 
 // ══════════════════════════════════════════════════════════════
 // STATS GLOBALES
@@ -140,12 +128,38 @@ router.put('/rizeries/:id', async (req, res) => {
 // DELETE /api/admin/rizeries/:id
 router.delete('/rizeries/:id', async (req, res) => {
   try {
-    const linked = await pool.query(`SELECT COUNT(*) FROM users WHERE rizerie_id=$1`, [req.params.id]);
-    if (Number(linked.rows[0].count) > 0)
-      return res.status(400).json({ error: 'Impossible : des comptes sont rattachés à cette rizerie' });
-    await pool.query('DELETE FROM rizeries WHERE id=$1', [req.params.id]);
+    const rizerieR = await pool.query('SELECT id, nom FROM rizeries WHERE id=$1', [req.params.id]);
+    if (!rizerieR.rows.length) return res.status(404).json({ error: 'Rizerie non trouvée' });
+
+    // La vérification (comptes/produits/clients encore rattachés) et le DELETE se font
+    // dans la même transaction, sur une ligne verrouillée, pour fermer la fenêtre de
+    // race condition entre le contrôle et la suppression effective.
+    await withTransaction(async (client) => {
+      await client.query('SELECT id FROM rizeries WHERE id=$1 FOR UPDATE', [req.params.id]);
+      const linked = await client.query(
+        `SELECT
+           (SELECT COUNT(*) FROM users WHERE rizerie_id=$1)    AS comptes,
+           (SELECT COUNT(*) FROM produits WHERE rizerie_id=$1) AS produits,
+           (SELECT COUNT(*) FROM clients WHERE rizerie_id=$1)  AS clients`,
+        [req.params.id]
+      );
+      const l = linked.rows[0];
+      if (Number(l.comptes) > 0 || Number(l.produits) > 0 || Number(l.clients) > 0) {
+        throw Object.assign(new Error('Impossible : des comptes, produits ou clients sont encore rattachés à cette rizerie'), {
+          status: 400,
+          detail: { comptes: Number(l.comptes), produits: Number(l.produits), clients: Number(l.clients) },
+        });
+      }
+      const del = await client.query('DELETE FROM rizeries WHERE id=$1 RETURNING *', [req.params.id]);
+      if (!del.rows.length) throw Object.assign(new Error('Rizerie non trouvée'), { status: 404 });
+    });
+
+    await log(req.userId, req.userNom, 'RIZERIE_DELETED', rizerieR.rows[0], {}, req.ip);
     res.json({ message: 'Rizerie supprimée' });
   } catch (err) {
+    if (err.status === 400) return res.status(400).json({ error: err.message, detail: err.detail });
+    if (err.status === 404) return res.status(404).json({ error: err.message });
+    logger.error('DELETE rizerie', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -286,11 +300,6 @@ async function createMembreHandler(req, res) {
     const rizier = rizierR.rows[0];
 
     const { nom, email, password, telephone, role, zone, manager_id } = req.body;
-    if (!nom || !email || !password)
-      return res.status(400).json({ error: 'Nom, email et mot de passe requis' });
-    if (password.length < 12)
-      return res.status(400).json({ error: 'Mot de passe : 12 caractères minimum' });
-
     const targetRole = ['directeur','manager','vendeur'].includes(role) ? role : 'vendeur';
 
     if (targetRole === 'directeur' && req.userRole !== 'superadmin')
@@ -312,23 +321,17 @@ async function createMembreHandler(req, res) {
       parentId = manager_id;
     }
 
-    const exists = await pool.query('SELECT id FROM users WHERE email=$1', [email.toLowerCase()]);
-    if (exists.rows.length) return res.status(409).json({ error: 'Cet email est déjà utilisé' });
-
-    const hash = await bcrypt.hash(password, 12);
-    const result = await pool.query(
-      `INSERT INTO users (nom, email, password, telephone, role, parent_id, zone, rizerie_id, rizerie)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-       RETURNING id, nom, email, telephone, role, zone, parent_id, rizerie_id, created_at`,
-      [nom.trim(), email.toLowerCase().trim(), hash, telephone || null,
-       targetRole, parentId, zone || null,
-       rizier.rizerie_id || null, rizier.rizerie_nom || null]
-    );
+    // Création via le même point d'entrée que routes/equipe.js et routes/emplois.js
+    // (utils/comptes.js) : rizier.id sert de créateur pour hériter rizerie_id/rizerie.
+    const user = await createComptePlateforme(pool, {
+      nom, email, password, role: targetRole, telephone, zone, parentId, creatorId: rizier.id,
+    });
     const actionMap = { directeur: 'DIRECTEUR_CREATED', manager: 'MANAGER_CREATED', vendeur: 'VENDEUR_CREATED' };
     await log(req.userId, req.userNom, actionMap[targetRole],
-              result.rows[0], { rizier: rizier.nom, email }, req.ip);
-    res.status(201).json(result.rows[0]);
+              user, { rizier: rizier.nom, email }, req.ip);
+    res.status(201).json(user);
   } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
     logger.error('admin create membre', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
@@ -527,9 +530,24 @@ router.delete('/users/:id', async (req, res) => {
     if (['superadmin', 'support'].includes(target.role) && req.userRole !== 'superadmin')
       return res.status(403).json({ error: 'Seul le superadmin peut supprimer ce compte' });
 
+    // Sans parent (compte racine, typiquement un rizier), il n'y a personne vers qui
+    // réassigner l'historique : on bloque plutôt que de laisser le cascade delete
+    // détruire silencieusement ventes/clients/emplois/contrats et l'équipe rattachée.
+    if (!target.parent_id) {
+      const childrenR = await pool.query('SELECT COUNT(*) FROM users WHERE parent_id=$1', [target.id]);
+      const hasChildren = Number(childrenR.rows[0].count) > 0;
+      const hasData = await hasOwnBusinessData(target.id);
+      if (hasChildren || hasData) {
+        return res.status(400).json({
+          error: 'Impossible de supprimer ce compte : il possède des données ou une équipe rattachées (ventes, clients, emplois, contrats...). Suspendez-le ou réassignez ses données avant suppression.',
+        });
+      }
+    }
+
     await withTransaction(async (client) => {
-      if (target.role === 'vendeur' && target.parent_id) {
-        await reassignVendeurData(client, target.id, target.parent_id);
+      if (target.parent_id) {
+        await reassignUserData(client, target.id, target.parent_id);
+        await client.query('UPDATE users SET parent_id=$1 WHERE parent_id=$2', [target.parent_id, target.id]);
       }
       await client.query('DELETE FROM users WHERE id = $1', [target.id]);
     });

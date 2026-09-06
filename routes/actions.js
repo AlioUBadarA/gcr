@@ -3,6 +3,7 @@ const { pool } = require('../db/pool');
 const logger = require('../utils/logger');
 const auth = require('../middleware/auth');
 const { getScopeIds } = require('../middleware/scope');
+const { tauxAtteinte: computeTauxAtteinte } = require('../utils/kpi');
 
 const router = express.Router();
 router.use(auth);
@@ -101,8 +102,7 @@ router.get('/', async (req, res) => {
       const objAnnuel = objMap[vd.id] || 0;
       if (!objAnnuel) return;
       const ca = caMap[vd.id] || 0;
-      const prorat = objAnnuel / 12 * monthsElapsed;
-      const tauxAtteinte = prorat > 0 ? ca / prorat * 100 : 0;
+      const tauxAtteinte = computeTauxAtteinte(ca, objAnnuel, monthsElapsed);
       if (tauxAtteinte >= 80) return;
       alertes.push({
         cat: 'Objectif sous cible',
