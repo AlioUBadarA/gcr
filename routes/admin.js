@@ -2,7 +2,7 @@ const express = require('express');
 const bcrypt  = require('bcryptjs');
 const jwt     = require('jsonwebtoken');
 const { pool, withTransaction, reassignUserData, hasOwnBusinessData } = require('../db/pool');
-const { createComptePlateforme } = require('../utils/comptes');
+const { createComptePlateforme, normalizeIdentifiants, checkIdentifiantsUniques } = require('../utils/comptes');
 const { log } = require('../utils/audit');
 const logger  = require('../utils/logger');
 const { isValidUUID } = require('../middleware/validate');
@@ -205,9 +205,12 @@ router.get('/users/:id', async (req, res) => {
   try {
     const [userR, statsR, ventesR, clientsR, pilotageR, vendeursR, managersR] = await Promise.all([
       pool.query(
-        `SELECT id, nom, email, rizerie, telephone, ville, role,
-                suspended, suspended_reason, suspended_at, must_change_password, created_at
-         FROM users WHERE id = $1`, [req.params.id]
+        `SELECT u.id, u.nom, u.email, u.rizerie, u.telephone, u.ville, u.role,
+                u.suspended, u.suspended_reason, u.suspended_at, u.must_change_password, u.created_at,
+                r.pays
+         FROM users u
+         LEFT JOIN rizeries r ON r.id = u.rizerie_id
+         WHERE u.id = $1`, [req.params.id]
       ),
       // Agrégats sur l'ensemble des ventes (pas seulement les 50 plus récentes affichées),
       // créances nettes des versements déjà reçus.
@@ -344,13 +347,13 @@ router.post('/users/:id/vendeurs', createMembreHandler); // rétrocompat
 router.post('/users', async (req, res) => {
   try {
     const { nom, email, password, rizerie_id, telephone, ville } = req.body;
-    if (!nom || !email || !password)
-      return res.status(400).json({ error: 'Nom, email et mot de passe requis' });
+    if (!nom || !password)
+      return res.status(400).json({ error: 'Nom et mot de passe requis' });
     if (password.length < 12)
       return res.status(400).json({ error: 'Mot de passe : 12 caractères minimum' });
 
-    const exists = await pool.query('SELECT id FROM users WHERE email=$1', [email.toLowerCase()]);
-    if (exists.rows.length) return res.status(409).json({ error: 'Cet email est déjà utilisé' });
+    const { emailNorm, telephoneNorm } = normalizeIdentifiants({ email, telephone });
+    await checkIdentifiantsUniques(pool, { emailNorm, telephoneNorm });
 
     // Récupère le nom de la rizerie pour le champ texte
     let rizeRieNom = null;
@@ -365,13 +368,14 @@ router.post('/users', async (req, res) => {
       `INSERT INTO users (nom, email, password, rizerie, rizerie_id, telephone, ville)
        VALUES ($1,$2,$3,$4,$5,$6,$7)
        RETURNING id, nom, email, rizerie, rizerie_id, telephone, ville, role, created_at`,
-      [nom.trim(), email.toLowerCase().trim(), hash,
-       rizeRieNom, rizerie_id || null, telephone || null, ville || null]
+      [nom.trim(), emailNorm, hash,
+       rizeRieNom, rizerie_id || null, telephoneNorm, ville || null]
     );
     await log(req.userId, req.userNom, 'ACCOUNT_CREATED_BY_ADMIN',
-              result.rows[0], { email }, req.ip);
+              result.rows[0], { email: emailNorm, telephone: telephoneNorm }, req.ip);
     res.status(201).json(result.rows[0]);
   } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
     logger.error('admin create user', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
@@ -581,25 +585,26 @@ router.get('/support', async (req, res) => {
 // POST /api/admin/support
 router.post('/support', requireSuperadmin, async (req, res) => {
   try {
-    const { nom, email, password } = req.body;
-    if (!nom || !email || !password)
-      return res.status(400).json({ error: 'Nom, email et mot de passe requis' });
+    const { nom, email, password, telephone } = req.body;
+    if (!nom || !password)
+      return res.status(400).json({ error: 'Nom et mot de passe requis' });
     if (password.length < 12)
       return res.status(400).json({ error: 'Mot de passe : 12 caractères minimum' });
 
-    const exists = await pool.query('SELECT id FROM users WHERE email=$1', [email.toLowerCase()]);
-    if (exists.rows.length) return res.status(409).json({ error: 'Cet email est déjà utilisé' });
+    const { emailNorm, telephoneNorm } = normalizeIdentifiants({ email, telephone });
+    await checkIdentifiantsUniques(pool, { emailNorm, telephoneNorm });
 
     const hash = await bcrypt.hash(password, 12);
     const result = await pool.query(
-      `INSERT INTO users (nom, email, password, role)
-       VALUES ($1,$2,$3,'support')
-       RETURNING id, nom, email, created_at`,
-      [nom.trim(), email.toLowerCase().trim(), hash]
+      `INSERT INTO users (nom, email, password, telephone, role)
+       VALUES ($1,$2,$3,$4,'support')
+       RETURNING id, nom, email, telephone, created_at`,
+      [nom.trim(), emailNorm, hash, telephoneNorm]
     );
-    await log(req.userId, req.userNom, 'SUPPORT_CREATED', result.rows[0], { email }, req.ip);
+    await log(req.userId, req.userNom, 'SUPPORT_CREATED', result.rows[0], { email: emailNorm, telephone: telephoneNorm }, req.ip);
     res.status(201).json(result.rows[0]);
   } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
     logger.error('POST support', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
@@ -685,25 +690,26 @@ router.get('/superadmins', requireSuperadmin, async (req, res) => {
 // POST /api/admin/superadmins
 router.post('/superadmins', requireSuperadmin, async (req, res) => {
   try {
-    const { nom, email, password } = req.body;
-    if (!nom || !email || !password)
-      return res.status(400).json({ error: 'Nom, email et mot de passe requis' });
+    const { nom, email, password, telephone } = req.body;
+    if (!nom || !password)
+      return res.status(400).json({ error: 'Nom et mot de passe requis' });
     if (password.length < 12)
       return res.status(400).json({ error: 'Mot de passe : 12 caractères minimum' });
 
-    const exists = await pool.query('SELECT id FROM users WHERE email=$1', [email.toLowerCase()]);
-    if (exists.rows.length) return res.status(409).json({ error: 'Cet email est déjà utilisé' });
+    const { emailNorm, telephoneNorm } = normalizeIdentifiants({ email, telephone });
+    await checkIdentifiantsUniques(pool, { emailNorm, telephoneNorm });
 
     const hash = await bcrypt.hash(password, 12);
     const result = await pool.query(
-      `INSERT INTO users (nom, email, password, role)
-       VALUES ($1,$2,$3,'superadmin')
-       RETURNING id, nom, email, created_at`,
-      [nom.trim(), email.toLowerCase().trim(), hash]
+      `INSERT INTO users (nom, email, password, telephone, role)
+       VALUES ($1,$2,$3,$4,'superadmin')
+       RETURNING id, nom, email, telephone, created_at`,
+      [nom.trim(), emailNorm, hash, telephoneNorm]
     );
-    await log(req.userId, req.userNom, 'SUPERADMIN_CREATED', result.rows[0], { email }, req.ip);
+    await log(req.userId, req.userNom, 'SUPERADMIN_CREATED', result.rows[0], { email: emailNorm, telephone: telephoneNorm }, req.ip);
     res.status(201).json(result.rows[0]);
   } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
     logger.error('POST superadmins', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }

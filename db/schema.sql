@@ -391,3 +391,19 @@ ALTER TABLE rizeries ADD COLUMN IF NOT EXISTS baseline_date DATE DEFAULT CURRENT
 -- Periode RIZAO sur les emplois : 'Avant RIZAO' ou 'Avec RIZAO' (défaut)
 ALTER TABLE emplois ADD COLUMN IF NOT EXISTS periode_rizao VARCHAR(20) DEFAULT 'Avec RIZAO'
   CHECK (periode_rizao IN ('Avant RIZAO', 'Avec RIZAO'));
+
+-- ── Compte via téléphone + indicatif (alternative à l'email) ──────────────────
+-- Le téléphone devient un identifiant de connexion valide au même titre que l'email
+-- (voir routes/auth.js) : email n'est donc plus systématiquement requis, mais au
+-- moins l'un des deux doit être renseigné.
+-- Pas de contrainte UNIQUE au niveau DB sur telephone : des comptes existants peuvent
+-- déjà partager un même numéro (saisi librement jusqu'ici), ce qui ferait échouer cette
+-- migration idempotente à chaque démarrage (voir db/pool.js initSchema, fatal au boot).
+-- L'unicité du téléphone pour les NOUVEAUX comptes est garantie au niveau applicatif par
+-- checkIdentifiantsUniques() (utils/comptes.js), comme pour l'email.
+ALTER TABLE users ALTER COLUMN email DROP NOT NULL;
+
+DO $$ BEGIN
+  ALTER TABLE users ADD CONSTRAINT users_email_or_telephone_check
+    CHECK (email IS NOT NULL OR telephone IS NOT NULL);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;

@@ -31,9 +31,17 @@ const LOCK_MINUTES = 15;
 
 router.post('/login', async (req, res) => {
   try {
-    const { email, password } = req.body;
-    if (!email || !password)
-      return res.status(400).json({ error: 'Email et mot de passe requis' });
+    // `identifiant` est le nouveau nom de champ (email OU téléphone) ; `email` reste accepté
+    // pour compatibilité avec d'anciens clients qui n'auraient pas encore basculé.
+    const identifiant = (req.body.identifiant ?? req.body.email ?? '').trim();
+    const { password } = req.body;
+    if (!identifiant || !password)
+      return res.status(400).json({ error: 'Email/téléphone et mot de passe requis' });
+
+    // Un téléphone (pas de '@') est comparé après suppression de tout ce qui n'est pas un
+    // chiffre ou '+', pour ignorer les espaces de formatage saisis via PhoneField.
+    const isEmail = identifiant.includes('@');
+    const identifiantNorm = isEmail ? identifiant.toLowerCase() : identifiant.replace(/[^0-9+]/g, '');
 
     const result = await pool.query(
       `SELECT u.id, u.nom, u.email, u.password, u.rizerie, u.telephone, u.ville,
@@ -41,14 +49,14 @@ router.post('/login', async (req, res) => {
               u.login_attempts, u.locked_until, r.pays
        FROM users u
        LEFT JOIN rizeries r ON r.id = u.rizerie_id
-       WHERE u.email = $1`,
-      [email.toLowerCase().trim()]
+       WHERE ${isEmail ? 'u.email = $1' : "regexp_replace(u.telephone, '[^0-9+]', '', 'g') = $1"}`,
+      [identifiantNorm]
     );
 
-    // Réponse générique pour ne pas révéler si l'email existe
+    // Réponse générique pour ne pas révéler si le compte existe
     if (!result.rows.length) {
-      await secLog('LOGIN_UNKNOWN_EMAIL', null, null, { email: email.toLowerCase().trim() }, req.ip);
-      logger.warn('LOGIN_UNKNOWN_EMAIL', { email: email.toLowerCase().trim(), ip: req.ip });
+      await secLog('LOGIN_UNKNOWN_IDENTIFIANT', null, null, { identifiant: identifiantNorm }, req.ip);
+      logger.warn('LOGIN_UNKNOWN_IDENTIFIANT', { identifiant: identifiantNorm, ip: req.ip });
       return res.status(401).json({ error: 'Email ou mot de passe incorrect' });
     }
 
