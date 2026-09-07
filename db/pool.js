@@ -432,6 +432,14 @@ async function runMigrations() {
      WHERE role IN ('rizier','support')
        AND must_change_password = FALSE
        AND password = crypt(LOWER(email), password)`,
+    // La migration "Rôle comptable" (plus haut) a élargi users_role_check mais avait oublié
+    // emplois_role_plateforme_check, resté figé sur ('vendeur','manager','directeur') : toute
+    // affectation du rôle comptable à un employé violait cette contrainte (erreur serveur 500).
+    `ALTER TABLE emplois DROP CONSTRAINT IF EXISTS emplois_role_plateforme_check`,
+    `DO $$ BEGIN
+       ALTER TABLE emplois ADD CONSTRAINT emplois_role_plateforme_check
+         CHECK (role_plateforme IN ('vendeur','manager','directeur','comptable'));
+     EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
   ];
 
   for (let i = 0; i < migrations.length; i++) {
