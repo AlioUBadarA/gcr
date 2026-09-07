@@ -256,10 +256,12 @@ router.get('/:id/versements', async (req, res) => {
 // POST /api/ventes/:id/versements — enregistrer un encaissement (paiement échelonné)
 router.post('/:id/versements', requirePerm('ventes:versement'), async (req, res) => {
   try {
-    const { montant, mode, date } = req.body;
+    const { montant, mode, date, prochaine_echeance } = req.body;
     if (!isPositiveNumber(montant)) return res.status(400).json({ error: 'montant doit etre un nombre positif' });
     if (mode && !MODES.includes(mode)) return res.status(400).json({ error: 'Mode de paiement invalide' });
     if (date && !isValidDate(date)) return res.status(400).json({ error: 'date invalide (format YYYY-MM-DD attendu)' });
+    if (prochaine_echeance && !isValidDate(prochaine_echeance))
+      return res.status(400).json({ error: 'prochaine_echeance invalide (format YYYY-MM-DD attendu)' });
 
     const ids = req.scopeIds;
 
@@ -285,6 +287,7 @@ router.post('/:id/versements', requirePerm('ventes:versement'), async (req, res)
         montantTotal: +vente.montant, totalDeja,
         statutTable: 'ventes', statutActuel: vente.statut_paiement,
         ownerUserId: vente.user_id, declaredBy: req.userId,
+        dateEcheanceColumn: 'date_echeance', prochaineEcheance: prochaine_echeance || null,
       });
     });
 

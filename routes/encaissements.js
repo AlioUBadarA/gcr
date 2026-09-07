@@ -145,10 +145,12 @@ router.post('/:type/:id/versements', requirePerm('encaissements:versement'), asy
   try {
     const target = targetTable(req.params.type);
     if (!target) return res.status(400).json({ error: 'Type invalide' });
-    const { montant, mode, date } = req.body;
+    const { montant, mode, date, prochaine_echeance } = req.body;
     if (!isPositiveNumber(montant)) return res.status(400).json({ error: 'montant doit etre un nombre positif' });
     if (mode && !MODES.includes(mode)) return res.status(400).json({ error: 'Mode de paiement invalide' });
     if (date && !isValidDate(date)) return res.status(400).json({ error: 'date invalide (format YYYY-MM-DD attendu)' });
+    if (prochaine_echeance && !isValidDate(prochaine_echeance))
+      return res.status(400).json({ error: 'prochaine_echeance invalide (format YYYY-MM-DD attendu)' });
 
     const ids = req.scopeIds;
 
@@ -158,6 +160,9 @@ router.post('/:type/:id/versements', requirePerm('encaissements:versement'), asy
     // cible en a un (paddy n'a pas de statut_paiement propre — seul le plafond s'applique).
     if (['vente', 'echeance', 'paddy'].includes(req.params.type)) {
       const statutTable = req.params.type === 'vente' ? 'ventes' : req.params.type === 'echeance' ? 'contrat_echeances' : null;
+      // Colonne portant la prochaine date de paiement attendue — le paddy n'en a pas
+      // (aucun suivi d'échéance structuré sur ce type de contrat actuellement).
+      const dateEcheanceColumn = req.params.type === 'vente' ? 'date_echeance' : req.params.type === 'echeance' ? 'date_paiement_prevue' : null;
       const versement = await withTransaction(async (client) => {
         const row = await findOwnedTarget(client, req.params.type, req.params.id, ids, { forUpdate: true });
         if (!row) { const e = new Error('Transaction non trouvee'); e.status = 404; throw e; }
@@ -178,6 +183,7 @@ router.post('/:type/:id/versements', requirePerm('encaissements:versement'), asy
           column: target.column, targetId: req.params.id, montant, mode, date,
           montantTotal, totalDeja, statutTable, statutActuel: row.statut_paiement,
           ownerUserId: row.owner_user_id || row.user_id, declaredBy: req.userId,
+          dateEcheanceColumn, prochaineEcheance: prochaine_echeance || null,
         });
       });
       return res.status(201).json(versement);

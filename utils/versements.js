@@ -14,7 +14,7 @@ const { hasComptableActif } = require('./comptes');
 // attend une validation comptable ; sinon, il est validé automatiquement (comportement
 // identique à avant l'existence du rôle comptable — aucune régression pour les rizeries qui
 // n'utilisent pas encore ce rôle).
-async function enregistrerVersement(client, { column, targetId, montant, mode, date, montantTotal, totalDeja, statutTable, statutActuel, ownerUserId, declaredBy }) {
+async function enregistrerVersement(client, { column, targetId, montant, mode, date, montantTotal, totalDeja, statutTable, statutActuel, ownerUserId, declaredBy, dateEcheanceColumn, prochaineEcheance }) {
   const restant = montantTotal - totalDeja;
   if (restant <= 0) {
     throw Object.assign(new Error('Déjà entièrement payé'), { status: 400 });
@@ -45,6 +45,13 @@ async function enregistrerVersement(client, { column, targetId, montant, mode, d
     }
     if (newStatut) {
       await client.query(`UPDATE ${statutTable} SET statut_paiement=$1 WHERE id=$2`, [newStatut, targetId]);
+    }
+
+    // Il reste un solde après cette tranche : la prochaine date de paiement attendue,
+    // saisie par le commercial, remplace l'ancienne échéance (sinon elle resterait figée sur
+    // la date fixée à la création, sans jamais refléter le nouvel accord avec le client).
+    if (dateEcheanceColumn && prochaineEcheance && newTotal < montantTotal) {
+      await client.query(`UPDATE ${statutTable} SET ${dateEcheanceColumn}=$1 WHERE id=$2`, [prochaineEcheance, targetId]);
     }
   }
   return result.rows[0];
