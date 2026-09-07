@@ -368,6 +368,22 @@ async function runMigrations() {
        ALTER TABLE versements ADD CONSTRAINT versements_one_target_check
          CHECK (num_nonnulls(vente_id, contrat_client_id, contrat_paddy_id, contrat_echeance_id) = 1);
      EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
+    // État civil complet sur la fiche employé (RH) — toutes nullable, une fiche existante
+    // reste valide sans ces informations tant qu'elles n'ont pas été saisies.
+    `ALTER TABLE emplois ADD COLUMN IF NOT EXISTS date_naissance DATE`,
+    `ALTER TABLE emplois ADD COLUMN IF NOT EXISTS lieu_naissance VARCHAR(150)`,
+    `ALTER TABLE emplois ADD COLUMN IF NOT EXISTS sexe VARCHAR(10)`,
+    `DO $$ BEGIN
+       ALTER TABLE emplois ADD CONSTRAINT emplois_sexe_check CHECK (sexe IS NULL OR sexe IN ('Homme','Femme'));
+     EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
+    `ALTER TABLE emplois ADD COLUMN IF NOT EXISTS nationalite VARCHAR(80)`,
+    `ALTER TABLE emplois ADD COLUMN IF NOT EXISTS piece_identite_type VARCHAR(30)`,
+    `DO $$ BEGIN
+       ALTER TABLE emplois ADD CONSTRAINT emplois_piece_identite_type_check
+         CHECK (piece_identite_type IS NULL OR piece_identite_type IN ('CNI','Passeport','Permis de conduire','Autre'));
+     EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
+    `ALTER TABLE emplois ADD COLUMN IF NOT EXISTS piece_identite_numero VARCHAR(60)`,
+    `ALTER TABLE emplois ADD COLUMN IF NOT EXISTS adresse TEXT`,
     // Lien persistant vers le client créé lors de la conversion d'un prospect "Gagné" — évite
     // de rechercher à nouveau par nom/téléphone à chaque sauvegarde (risque de doublon si le
     // nom a légèrement changé entretemps).
