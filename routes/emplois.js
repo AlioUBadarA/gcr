@@ -179,7 +179,7 @@ router.put('/:id', async (req, res) => {
 // qui porte déjà cette logique de hiérarchie plus fine.
 router.patch('/:id/affecter', async (req, res) => {
   try {
-    const { role_plateforme, email, password, objectif_annuel } = req.body;
+    const { role_plateforme, email, password, telephone, objectif_annuel } = req.body;
     if (!ROLES_PLATEFORME.includes(role_plateforme)) {
       return res.status(400).json({ error: 'Rôle plateforme invalide (vendeur, manager, directeur, comptable)' });
     }
@@ -202,10 +202,21 @@ router.patch('/:id/affecter', async (req, res) => {
         e.status = 400; throw e;
       }
 
+      // Le formulaire d'affectation peut fournir un téléphone (avec indicatif) quand la fiche
+      // RH n'en a pas encore — utilisé comme identifiant du compte à la place de l'email.
+      // À défaut, on garde le téléphone déjà enregistré sur la fiche employé.
+      const telephoneCompte = telephone?.trim() || existing.telephone;
+
       const user = await createComptePlateforme(client, {
-        nom: existing.nom, email, password, role: role_plateforme, telephone: existing.telephone,
+        nom: existing.nom, email, password, role: role_plateforme, telephone: telephoneCompte,
         parentId: role_plateforme === 'comptable' ? null : req.userId, creatorId: req.userId,
       });
+
+      // Garde la fiche RH synchronisée si un nouveau téléphone a été saisi ici (même logique
+      // que PUT /:id, qui répercute déjà nom/téléphone de la fiche vers le compte lié).
+      if (telephoneCompte && telephoneCompte !== existing.telephone) {
+        await client.query('UPDATE emplois SET telephone=$1 WHERE id=$2', [telephoneCompte, req.params.id]);
+      }
 
       const r = await client.query(
         `UPDATE emplois SET user_account_id=$1, role_plateforme=$2 WHERE id=$3 RETURNING *`,
