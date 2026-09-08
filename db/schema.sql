@@ -43,7 +43,7 @@ BEGIN
   IF c IS NOT NULL THEN EXECUTE format('ALTER TABLE users DROP CONSTRAINT %I', c); END IF;
   BEGIN
     ALTER TABLE users ADD CONSTRAINT users_role_check
-      CHECK (role IN ('rizier','superadmin','vendeur','support','manager'));
+      CHECK (role IN ('rizier','superadmin','vendeur','support','manager','directeur','comptable'));
   EXCEPTION WHEN duplicate_object THEN NULL; END;
 END $$;
 
