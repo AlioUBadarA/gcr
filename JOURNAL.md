@@ -199,4 +199,11 @@
 
 ---
 
-*Fichier généré automatiquement — dernière mise à jour : 25 juin 2026*
+## 8 septembre 2026
+
+### Base de données
+- **Fix contrainte de rôle** — la contrainte `users_role_check` dans `schema.sql` était limitée à 5 rôles, empêchant l'insertion de tout rôle non listé ; contrainte élargie pour couvrir l'ensemble des rôles valides du système
+
+---
+
+*Fichier généré automatiquement — dernière mise à jour : 8 septembre 2026*
