@@ -1,7 +1,7 @@
 const express = require('express');
 const bcrypt  = require('bcryptjs');
 const jwt     = require('jsonwebtoken');
-const { pool, withTransaction, reassignUserData, hasOwnBusinessData } = require('../db/pool');
+const { pool, withTransaction, reassignUserData, hasOwnBusinessData, archiveAndDeleteUserTree } = require('../db/pool');
 const { createComptePlateforme, normalizeIdentifiants, checkIdentifiantsUniques } = require('../utils/comptes');
 const { log } = require('../utils/audit');
 const logger  = require('../utils/logger');
@@ -126,9 +126,17 @@ router.put('/rizeries/:id', async (req, res) => {
 });
 
 // DELETE /api/admin/rizeries/:id
+// force=true (superadmin uniquement) : au lieu de bloquer si des comptes/produits/clients sont
+// encore rattachés, chaque compte racine de la rizerie est archivé (voir deleted_data_archives)
+// puis supprimé en cascade avant de supprimer la rizerie — rien n'est perdu, tout est consultable
+// ensuite via GET /api/admin/archives.
 router.delete('/rizeries/:id', async (req, res) => {
   try {
-    const rizerieR = await pool.query('SELECT id, nom FROM rizeries WHERE id=$1', [req.params.id]);
+    const force = req.body?.force === true || req.query.force === 'true';
+    if (force && req.userRole !== 'superadmin')
+      return res.status(403).json({ error: 'Seul le superadmin peut forcer cette suppression' });
+
+    const rizerieR = await pool.query('SELECT * FROM rizeries WHERE id=$1', [req.params.id]);
     if (!rizerieR.rows.length) return res.status(404).json({ error: 'Rizerie non trouvée' });
 
     // La vérification (comptes/produits/clients encore rattachés) et le DELETE se font
@@ -136,6 +144,17 @@ router.delete('/rizeries/:id', async (req, res) => {
     // race condition entre le contrôle et la suppression effective.
     await withTransaction(async (client) => {
       await client.query('SELECT id FROM rizeries WHERE id=$1 FOR UPDATE', [req.params.id]);
+
+      if (force) {
+        const rootsR = await client.query(
+          'SELECT id FROM users WHERE rizerie_id=$1 AND parent_id IS NULL',
+          [req.params.id]
+        );
+        for (const root of rootsR.rows) {
+          await archiveAndDeleteUserTree(client, root.id, { id: req.userId, nom: req.userNom });
+        }
+      }
+
       const linked = await client.query(
         `SELECT
            (SELECT COUNT(*) FROM users WHERE rizerie_id=$1)    AS comptes,
@@ -150,12 +169,21 @@ router.delete('/rizeries/:id', async (req, res) => {
           detail: { comptes: Number(l.comptes), produits: Number(l.produits), clients: Number(l.clients) },
         });
       }
+
+      if (force) {
+        await client.query(
+          `INSERT INTO deleted_data_archives (type, entity_id, entity_nom, snapshot, deleted_by, deleted_by_nom)
+           VALUES ('rizerie', $1, $2, $3, $4, $5)`,
+          [req.params.id, rizerieR.rows[0].nom, JSON.stringify(rizerieR.rows[0]), req.userId, req.userNom]
+        );
+      }
+
       const del = await client.query('DELETE FROM rizeries WHERE id=$1 RETURNING *', [req.params.id]);
       if (!del.rows.length) throw Object.assign(new Error('Rizerie non trouvée'), { status: 404 });
     });
 
-    await log(req.userId, req.userNom, 'RIZERIE_DELETED', rizerieR.rows[0], {}, req.ip);
-    res.json({ message: 'Rizerie supprimée' });
+    await log(req.userId, req.userNom, force ? 'RIZERIE_FORCE_DELETED' : 'RIZERIE_DELETED', rizerieR.rows[0], {}, req.ip);
+    res.json({ message: force ? 'Rizerie et toutes ses données archivées puis supprimées' : 'Rizerie supprimée' });
   } catch (err) {
     if (err.status === 400) return res.status(400).json({ error: err.message, detail: err.detail });
     if (err.status === 404) return res.status(404).json({ error: err.message });
@@ -520,10 +548,17 @@ router.post('/users/:id/impersonate', async (req, res) => {
 // DELETE /api/admin/users/:id — supprimer un compte
 // Si c'est un vendeur, ses ventes/clients sont rattachés au rizier parent avant suppression
 // (au lieu d'être supprimés en cascade) pour ne pas perdre l'historique commercial.
+// force=true (superadmin uniquement) : pour un compte racine bloqué (ventes/emplois/équipe
+// rattachés), archive toutes ces données (voir deleted_data_archives) puis supprime en cascade
+// au lieu de bloquer — consultable ensuite via GET /api/admin/archives.
 router.delete('/users/:id', async (req, res) => {
   try {
     if (req.params.id === req.userId)
       return res.status(400).json({ error: 'Impossible de supprimer son propre compte' });
+
+    const force = req.body?.force === true;
+    if (force && req.userRole !== 'superadmin')
+      return res.status(403).json({ error: 'Seul le superadmin peut forcer cette suppression' });
 
     const userR = await pool.query(
       'SELECT id, nom, email, role, parent_id FROM users WHERE id = $1', [req.params.id]
@@ -536,19 +571,28 @@ router.delete('/users/:id', async (req, res) => {
 
     // Sans parent (compte racine, typiquement un rizier), il n'y a personne vers qui
     // réassigner l'historique : on bloque plutôt que de laisser le cascade delete
-    // détruire silencieusement ventes/clients/emplois/contrats et l'équipe rattachée.
+    // détruire silencieusement ventes/clients/emplois/contrats et l'équipe rattachée,
+    // sauf si le superadmin force la suppression (archivage préalable).
+    let forced = false;
     if (!target.parent_id) {
       const childrenR = await pool.query('SELECT COUNT(*) FROM users WHERE parent_id=$1', [target.id]);
       const hasChildren = Number(childrenR.rows[0].count) > 0;
       const hasData = await hasOwnBusinessData(target.id);
       if (hasChildren || hasData) {
-        return res.status(400).json({
-          error: 'Impossible de supprimer ce compte : il possède des données ou une équipe rattachées (ventes, clients, emplois, contrats...). Suspendez-le ou réassignez ses données avant suppression.',
-        });
+        if (!force) {
+          return res.status(400).json({
+            error: 'Impossible de supprimer ce compte : il possède des données ou une équipe rattachées (ventes, clients, emplois, contrats...). Suspendez-le, réassignez ses données, ou forcez la suppression (archivage automatique, superadmin uniquement).',
+          });
+        }
+        forced = true;
       }
     }
 
     await withTransaction(async (client) => {
+      if (forced) {
+        await archiveAndDeleteUserTree(client, target.id, { id: req.userId, nom: req.userNom });
+        return;
+      }
       if (target.parent_id) {
         await reassignUserData(client, target.id, target.parent_id);
         await client.query('UPDATE users SET parent_id=$1 WHERE parent_id=$2', [target.parent_id, target.id]);
@@ -556,8 +600,8 @@ router.delete('/users/:id', async (req, res) => {
       await client.query('DELETE FROM users WHERE id = $1', [target.id]);
     });
 
-    await log(req.userId, req.userNom, 'ACCOUNT_DELETED', target, { email: target.email }, req.ip);
-    res.json({ message: 'Compte supprimé définitivement' });
+    await log(req.userId, req.userNom, forced ? 'ACCOUNT_FORCE_DELETED' : 'ACCOUNT_DELETED', target, { email: target.email }, req.ip);
+    res.json({ message: forced ? 'Compte et toutes ses données archivés puis supprimés définitivement' : 'Compte supprimé définitivement' });
   } catch (err) {
     logger.error('admin delete user', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
@@ -1146,6 +1190,37 @@ router.get('/performance', async (req, res) => {
     });
   } catch (err) {
     logger.error('admin performance', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════
+// ARCHIVES DE SUPPRESSION FORCÉE (superadmin) — données sauvegardées
+// avant un DELETE forcé de compte/rizerie (voir force=true ci-dessus).
+// ══════════════════════════════════════════════════════════════
+
+// GET /api/admin/archives
+router.get('/archives', requireSuperadmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, type, entity_id, entity_nom, deleted_by_nom, created_at
+       FROM deleted_data_archives ORDER BY created_at DESC`
+    );
+    res.json(result.rows);
+  } catch (err) {
+    logger.error('GET archives', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// GET /api/admin/archives/:id — détail complet (snapshot JSON des données supprimées)
+router.get('/archives/:id', requireSuperadmin, async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM deleted_data_archives WHERE id=$1', [req.params.id]);
+    if (!result.rows.length) return res.status(404).json({ error: 'Archive non trouvée' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    logger.error('GET archive detail', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });

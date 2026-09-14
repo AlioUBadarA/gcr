@@ -499,6 +499,23 @@ async function runMigrations() {
        ALTER TABLE versements ADD CONSTRAINT versements_one_target_check
          CHECK (num_nonnulls(vente_id, contrat_client_id, contrat_paddy_id, contrat_echeance_id, depot_vente_id) = 1);
      EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
+
+    // ── Archives de suppression forcée (superadmin) ─────────────────
+    // Quand un compte racine ou une rizerie a encore des ventes/emplois/etc. rattachés, la
+    // suppression est normalement bloquée (voir hasOwnBusinessData). Le superadmin peut forcer
+    // la suppression : toutes les données métier sont d'abord sauvegardées ici (snapshot JSON)
+    // avant le DELETE, pour ne jamais perdre l'historique même en cas de suppression forcée.
+    `CREATE TABLE IF NOT EXISTS deleted_data_archives (
+       id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+       type            VARCHAR(20) NOT NULL CHECK (type IN ('user','rizerie')),
+       entity_id       UUID NOT NULL,
+       entity_nom      VARCHAR(150),
+       snapshot        JSONB NOT NULL,
+       deleted_by      UUID REFERENCES users(id) ON DELETE SET NULL,
+       deleted_by_nom  VARCHAR(120),
+       created_at      TIMESTAMPTZ DEFAULT NOW()
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_archives_type_entity ON deleted_data_archives(type, entity_id)`,
   ];
 
   for (let i = 0; i < migrations.length; i++) {
@@ -602,6 +619,42 @@ async function hasOwnBusinessData(userId) {
   return Object.values(rows[0]).some((n) => Number(n) > 0);
 }
 
+// Tables métier propres à un compte (voir hasOwnBusinessData / reassignUserData ci-dessus).
+const BUSINESS_TABLES = [
+  'ventes', 'clients', 'emplois', 'contrats_clients', 'contrats_paddy',
+  'depots_vente', 'prospection', 'activites', 'produits',
+];
+
+// Capture toutes les lignes métier d'un compte (avant suppression forcée) sous forme de snapshot.
+async function snapshotUserBusinessData(client, userId) {
+  const snapshot = {};
+  for (const table of BUSINESS_TABLES) {
+    const { rows } = await client.query(`SELECT * FROM ${table} WHERE user_id=$1`, [userId]);
+    if (rows.length) snapshot[table] = rows;
+  }
+  return snapshot;
+}
+
+// Suppression forcée (superadmin) d'un compte et de toute son équipe (parent_id en cascade) :
+// contrairement à reassignUserData, les données ne sont pas transférées mais sauvegardées dans
+// deleted_data_archives (snapshot JSON) avant le DELETE, qui déclenche ensuite le cascade DB
+// normal (ventes/clients/emplois/... ON DELETE CASCADE sur user_id).
+async function archiveAndDeleteUserTree(client, userId, actor) {
+  const childrenR = await client.query('SELECT id FROM users WHERE parent_id=$1', [userId]);
+  for (const child of childrenR.rows) {
+    await archiveAndDeleteUserTree(client, child.id, actor);
+  }
+  const userR = await client.query('SELECT * FROM users WHERE id=$1', [userId]);
+  if (!userR.rows.length) return;
+  const snapshot = await snapshotUserBusinessData(client, userId);
+  await client.query(
+    `INSERT INTO deleted_data_archives (type, entity_id, entity_nom, snapshot, deleted_by, deleted_by_nom)
+     VALUES ('user', $1, $2, $3, $4, $5)`,
+    [userId, userR.rows[0].nom, JSON.stringify({ account: userR.rows[0], data: snapshot }), actor.id, actor.nom]
+  );
+  await client.query('DELETE FROM users WHERE id=$1', [userId]);
+}
+
 // Génère un numéro de transaction unique par rizerie (ex: V-2026-0007).
 // Utilise un compteur atomique (INSERT … ON CONFLICT DO UPDATE) pour éviter
 // toute race condition entre deux transactions simultanées.
@@ -631,4 +684,7 @@ async function nextNumero(table, prefix, userId) {
   return `${prefix}-${year}-${String(rows[0].last_val).padStart(4, '0')}`;
 }
 
-module.exports = { pool, initSchema, runMigrations, withTransaction, reassignUserData, hasOwnBusinessData, nextNumero };
+module.exports = {
+  pool, initSchema, runMigrations, withTransaction, reassignUserData, hasOwnBusinessData,
+  archiveAndDeleteUserTree, nextNumero,
+};
