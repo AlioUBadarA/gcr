@@ -5,6 +5,9 @@ const CONDITIONS_PAIEMENT = [
   'Comptant',
   'J+15',
   'J+30',
+  'J+45',
+  'J+60',
+  'J+90',
   '50% comptant / 50% J+15',
   '50% comptant / 50% J+30',
 ];
@@ -25,6 +28,9 @@ function echeanceParDefaut(conditionsPaiement, dateVente) {
     case 'Comptant': return addDays(dateVente, 0);
     case 'J+15': return addDays(dateVente, 15);
     case 'J+30': return addDays(dateVente, 30);
+    case 'J+45': return addDays(dateVente, 45);
+    case 'J+60': return addDays(dateVente, 60);
+    case 'J+90': return addDays(dateVente, 90);
     case '50% comptant / 50% J+15': return addDays(dateVente, 15);
     case '50% comptant / 50% J+30': return addDays(dateVente, 30);
     default: return null;

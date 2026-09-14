@@ -16,7 +16,7 @@ router.get('/', async (req, res) => {
     const ids = await getScopeIds(req.userId, req.userRole);
     const monthsElapsed = annee === new Date().getFullYear() ? new Date().getMonth() + 1 : 12;
 
-    const [forecastR, realisR, vendeursR, ventesVendeurR, objVendeurR, contractualiseR] = await Promise.all([
+    const [forecastR, realisR, vendeursR, ventesVendeurR, objVendeurR, contractualiseR, depotRealisR, depotVendeurR] = await Promise.all([
       pool.query(
         `SELECT id, mois, produit, objectif_montant, user_id
          FROM forecast WHERE user_id = ANY($1::uuid[]) AND annee = $2
@@ -55,10 +55,29 @@ router.get('/', async (req, res) => {
          GROUP BY e.mois`,
         [ids, annee]
       ),
+      // Dépôt-vente : réalisé aux quantités vendues déclarées par le distributeur (voir
+      // routes/depots.js), pas au dépôt initial — compte comme du réalisé au même titre
+      // qu'une vente classique dans le suivi objectif/réalisé.
+      pool.query(
+        `SELECT EXTRACT(MONTH FROM dm.date)::int AS mois,
+                COALESCE(SUM(dm.quantite*d.prix_unitaire), 0) AS realise
+         FROM depot_mouvements dm JOIN depots_vente d ON d.id = dm.depot_vente_id
+         WHERE dm.type='vente' AND d.user_id = ANY($1::uuid[]) AND EXTRACT(YEAR FROM dm.date) = $2
+         GROUP BY mois`,
+        [ids, annee]
+      ),
+      pool.query(
+        `SELECT d.user_id, COALESCE(SUM(dm.quantite*d.prix_unitaire),0) AS ca
+         FROM depot_mouvements dm JOIN depots_vente d ON d.id = dm.depot_vente_id
+         WHERE dm.type='vente' AND d.user_id = ANY($1::uuid[]) AND EXTRACT(YEAR FROM dm.date)=$2
+         GROUP BY d.user_id`,
+        [ids, annee]
+      ),
     ]);
 
     const realisMap = {};
     realisR.rows.forEach(r => { realisMap[r.mois] = +r.realise; });
+    depotRealisR.rows.forEach(r => { realisMap[r.mois] = (realisMap[r.mois] || 0) + (+r.realise); });
 
     const contractualiseMap = {};
     contractualiseR.rows.forEach(r => { contractualiseMap[r.mois] = +r.contractualise; });
@@ -82,6 +101,7 @@ router.get('/', async (req, res) => {
     });
 
     const caVendeurMap = {}; ventesVendeurR.rows.forEach(r => { caVendeurMap[r.user_id] = +r.ca; });
+    depotVendeurR.rows.forEach(r => { caVendeurMap[r.user_id] = (caVendeurMap[r.user_id] || 0) + (+r.ca); });
     const objVendeurMap = {}; objVendeurR.rows.forEach(r => { objVendeurMap[r.user_id] = +r.obj; });
     const par_vendeur = vendeursR.rows.map(v => {
       const ca = caVendeurMap[v.id] || 0;

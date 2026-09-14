@@ -6,6 +6,8 @@ const PERMISSIONS = {
   'ventes:delete':            ['manager', 'directeur', 'rizier', 'support', 'superadmin'],
   'ventes:versement':         ['manager', 'directeur', 'rizier', 'support', 'superadmin'],
   'ventes:statut':            ['manager', 'directeur', 'rizier', 'support', 'superadmin'],
+  'depots:delete':            ['manager', 'directeur', 'rizier', 'support', 'superadmin'],
+  'depots:statut':            ['manager', 'directeur', 'rizier', 'support', 'superadmin'],
   'encaissements:versement':  ['manager', 'directeur', 'rizier', 'support', 'superadmin'],
   'pilotage:access':          ['manager', 'directeur', 'rizier'],
   // Le comptable valide/rejette les encaissements déclarés par le commercial (voir

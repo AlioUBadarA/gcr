@@ -23,6 +23,7 @@ router.get('/', async (req, res) => {
       versementsR, echeancesR,
       vendeursR, ventesVendeurR, forecastVendeurR,
       mouvementsR,
+      depotKpisR, depotMensuelR, depotTopClientsR, depotSegmentR, depotRegionR, depotProduitR, depotVendeurR,
     ] = await Promise.all([
 
       pool.query(`
@@ -65,8 +66,7 @@ router.get('/', async (req, res) => {
         FROM ventes v
         LEFT JOIN clients c ON c.id = v.client_id
         WHERE v.user_id = ANY($1::uuid[])
-        GROUP BY v.client_id, COALESCE(c.nom, v.client_nom)
-        ORDER BY ca_total DESC LIMIT 10`,
+        GROUP BY v.client_id, COALESCE(c.nom, v.client_nom)`,
         [ids]
       ),
 
@@ -119,9 +119,10 @@ router.get('/', async (req, res) => {
       ),
 
       // Encaissements réels : versements sur ventes, contrats clients (ancien modèle),
-      // échéances de contrat (nouveau modèle, mois par mois) ET contrats paddy — par date de
-      // versement. Les 4 cibles possibles de `versements` doivent toutes être couvertes ici,
-      // sous peine de sous-compter l'encaissé par rapport à GET /api/encaissements/mois.
+      // échéances de contrat (nouveau modèle, mois par mois), contrats paddy ET dépôts-vente —
+      // par date de versement. Les 5 cibles possibles de `versements` doivent toutes être
+      // couvertes ici, sous peine de sous-compter l'encaissé par rapport à
+      // GET /api/encaissements/mois.
       // Seuls les versements validés comptablement comptent dans cet indicateur officiel
       // (déclaré ≠ validé — voir routes/comptabilite.js) ; sans comptable actif sur la
       // rizerie, tout est auto-validé à la déclaration, donc rien ne change dans ce cas.
@@ -136,9 +137,10 @@ router.get('/', async (req, res) => {
         LEFT JOIN contrats_paddy     cp  ON cp.id  = ver.contrat_paddy_id
         LEFT JOIN contrat_echeances  ce  ON ce.id  = ver.contrat_echeance_id
         LEFT JOIN contrats_clients   cce ON cce.id = ce.contrat_client_id
+        LEFT JOIN depots_vente       dv  ON dv.id  = ver.depot_vente_id
         WHERE ver.statut_validation = 'valide'
           AND (v.user_id = ANY($1::uuid[]) OR cc.user_id = ANY($1::uuid[])
-           OR cp.user_id = ANY($1::uuid[]) OR cce.user_id = ANY($1::uuid[]))`,
+           OR cp.user_id = ANY($1::uuid[]) OR cce.user_id = ANY($1::uuid[]) OR dv.user_id = ANY($1::uuid[]))`,
         [ids, m, y]
       ),
 
@@ -186,22 +188,103 @@ router.get('/', async (req, res) => {
           (SELECT COALESCE(SUM(valeur_estimee),0) FROM prospection WHERE user_id = ANY($1::uuid[]) AND statut NOT IN ('Gagné','Perdu')) AS pipeline_espere,
           (SELECT COUNT(*) FROM prospection WHERE user_id = ANY($1::uuid[]) AND statut NOT IN ('Gagné','Perdu'))                        AS pipeline_nb
       `, [ids, y]),
+
+      // ── Dépôt-vente : chiffre d'affaires reconnu aux quantités vendues déclarées ─────────
+      // (rapports périodiques du distributeur, voir routes/depots.js), pas au moment du dépôt.
+      // Chaque rapport "vente" est daté à sa déclaration et vaut quantité × prix unitaire, sur
+      // le même principe que la colonne générée `montant` d'une vente classique.
+      pool.query(`
+        SELECT
+          COALESCE(SUM(dm.quantite*d.prix_unitaire) FILTER (WHERE EXTRACT(MONTH FROM dm.date)=$2 AND EXTRACT(YEAR FROM dm.date)=$3), 0) AS ca_mois,
+          COUNT(*) FILTER (WHERE EXTRACT(MONTH FROM dm.date)=$2 AND EXTRACT(YEAR FROM dm.date)=$3) AS nb_mois,
+          COALESCE(SUM(dm.quantite*d.prix_unitaire) FILTER (WHERE EXTRACT(YEAR FROM dm.date)=$3), 0) AS ca_ytd,
+          COUNT(*) FILTER (WHERE EXTRACT(YEAR FROM dm.date)=$3) AS nb_ytd,
+          COALESCE(SUM(dm.quantite*d.prix_unitaire), 0) AS total_facture
+        FROM depot_mouvements dm JOIN depots_vente d ON d.id = dm.depot_vente_id
+        WHERE dm.type='vente' AND d.user_id = ANY($1::uuid[])`,
+        [ids, m, y]
+      ),
+
+      pool.query(`
+        SELECT
+          EXTRACT(YEAR  FROM dm.date)::int AS annee,
+          EXTRACT(MONTH FROM dm.date)::int AS mois,
+          COALESCE(SUM(dm.quantite*d.prix_unitaire), 0) AS ca
+        FROM depot_mouvements dm JOIN depots_vente d ON d.id = dm.depot_vente_id
+        WHERE dm.type='vente' AND d.user_id = ANY($1::uuid[])
+          AND dm.date >= (NOW() - INTERVAL '6 months')
+        GROUP BY annee, mois`,
+        [ids]
+      ),
+
+      pool.query(`
+        SELECT COALESCE(c.nom, d.client_nom) AS nom,
+               COALESCE(SUM(dm.quantite*d.prix_unitaire),0) AS ca_total, COUNT(*) AS nb_ventes
+        FROM depot_mouvements dm
+        JOIN depots_vente d ON d.id = dm.depot_vente_id
+        LEFT JOIN clients c ON c.id = d.client_id
+        WHERE dm.type='vente' AND d.user_id = ANY($1::uuid[])
+        GROUP BY d.client_id, COALESCE(c.nom, d.client_nom)`,
+        [ids]
+      ),
+
+      pool.query(`
+        SELECT COALESCE(c.segment, 'Non classé') AS segment, COALESCE(SUM(dm.quantite*d.prix_unitaire),0) AS ca
+        FROM depot_mouvements dm
+        JOIN depots_vente d ON d.id = dm.depot_vente_id
+        LEFT JOIN clients c ON c.id = d.client_id
+        WHERE dm.type='vente' AND d.user_id = ANY($1::uuid[]) AND EXTRACT(YEAR FROM dm.date)=$2
+        GROUP BY c.segment`,
+        [ids, y]
+      ),
+
+      pool.query(`
+        SELECT COALESCE(c.region, 'Non classé') AS region, COALESCE(SUM(dm.quantite*d.prix_unitaire),0) AS ca
+        FROM depot_mouvements dm
+        JOIN depots_vente d ON d.id = dm.depot_vente_id
+        LEFT JOIN clients c ON c.id = d.client_id
+        WHERE dm.type='vente' AND d.user_id = ANY($1::uuid[]) AND EXTRACT(YEAR FROM dm.date)=$2
+        GROUP BY c.region`,
+        [ids, y]
+      ),
+
+      pool.query(`
+        SELECT d.produit, COALESCE(SUM(dm.quantite*d.prix_unitaire),0) AS ca
+        FROM depot_mouvements dm JOIN depots_vente d ON d.id = dm.depot_vente_id
+        WHERE dm.type='vente' AND d.user_id = ANY($1::uuid[]) AND EXTRACT(YEAR FROM dm.date)=$2
+        GROUP BY d.produit`,
+        [ids, y]
+      ),
+
+      pool.query(`
+        SELECT d.user_id, COALESCE(SUM(dm.quantite*d.prix_unitaire),0) AS ca
+        FROM depot_mouvements dm JOIN depots_vente d ON d.id = dm.depot_vente_id
+        WHERE dm.type='vente' AND d.user_id = ANY($1::uuid[]) AND EXTRACT(YEAR FROM dm.date)=$2
+        GROUP BY d.user_id`,
+        [ids, y]
+      ),
     ]);
 
     const k = kpis.rows[0];
     const cr = creances.rows[0];
     const ver = versementsR.rows[0];
     const ech = echeancesR.rows[0];
+    const dk = depotKpisR.rows[0];
     const clientsStatut = {};
     clientsStatutR.rows.forEach(r => { clientsStatut[r.statut] = +r.nb; });
 
-    const caYTD = +k.ca_ytd;
+    // CA dépôt-vente : reconnu aux quantités vendues déclarées, pas au dépôt initial (voir la
+    // requête depotKpisR ci-dessus). Le dépôt n'a pas de cout_unitaire propre — son coût est
+    // toujours estimé au même taux de repli que les ventes sans coût réel renseigné.
+    const caYTD = +k.ca_ytd + (+dk.ca_ytd);
+    const coutYTD = +k.cout_ytd + (+dk.ca_ytd * COUT_FALLBACK_PCT / 100);
     const objAnnuel = +objAnnuelR.rows[0].obj;
-    const margeNette = caYTD - (+k.cout_ytd);
+    const margeNette = caYTD - coutYTD;
     const projectionAnnuel = projectionAnnuelle(caYTD, monthsElapsed);
     const tauxAtteinte = computeTauxAtteinte(caYTD, objAnnuel, monthsElapsed);
 
     const caVendeurMap = {}; ventesVendeurR.rows.forEach(r => { caVendeurMap[r.user_id] = +r.ca; });
+    depotVendeurR.rows.forEach(r => { caVendeurMap[r.user_id] = (caVendeurMap[r.user_id] || 0) + (+r.ca); });
     const objVendeurMap = {}; forecastVendeurR.rows.forEach(r => { objVendeurMap[r.user_id] = +r.obj; });
     const atteinte_vendeurs = vendeursR.rows.map(v => {
       const ca = caVendeurMap[v.id] || 0;
@@ -211,28 +294,47 @@ router.get('/', async (req, res) => {
 
     const mv = mouvementsR.rows[0];
 
+    // Fusionne une ventilation "ventes" et son équivalent "dépôt-vente" sur la même clé
+    // (ex: nom de client, segment...), en sommant les CA et, si présent, les compteurs.
+    const mergeParCle = (rowsVentes, rowsDepot, keyField, extraFields = []) => {
+      const map = new Map();
+      rowsVentes.forEach((r) => map.set(r[keyField], { ...r, ca: +r.ca }));
+      rowsDepot.forEach((r) => {
+        const existing = map.get(r[keyField]);
+        if (existing) {
+          existing.ca += +r.ca;
+          extraFields.forEach((f) => { if (r[f] != null) existing[f] = (+existing[f] || 0) + (+r[f]); });
+        } else {
+          map.set(r[keyField], { ...r, ca: +r.ca });
+        }
+      });
+      return [...map.values()].sort((a, b) => b.ca - a.ca);
+    };
+
     res.json({
       kpis: {
-        ca_mois: +k.ca_mois,
-        nb_ventes_mois: +k.nb_ventes_mois,
+        ca_mois: +k.ca_mois + (+dk.ca_mois),
+        nb_ventes_mois: +k.nb_ventes_mois + (+dk.nb_mois),
         ca_ytd: caYTD,
-        nb_ventes_ytd: +k.nb_ventes_ytd,
+        nb_ventes_ytd: +k.nb_ventes_ytd + (+dk.nb_ytd),
         projection_annuel: projectionAnnuel,
         objectif_annuel: objAnnuel,
         taux_atteinte: tauxAtteinte,
         marge_nette: margeNette,
         taux_marge_nette: caYTD > 0 ? Math.round(margeNette / caYTD * 100) : 0,
         // Créances = ventes non soldées + échéances de contrats récurrents non soldées
-        // (chacune nette des versements déjà reçus).
+        // (chacune nette des versements déjà reçus). Le solde dû d'un dépôt-vente n'a pas de
+        // notion de retard structurée (pas d'échéance fixe) : il n'est pas compté ici.
         total_creances: +k.total_creances + (+ech.total_creances),
         nb_creances: +k.nb_creances + (+ech.nb_creances),
         pipeline_espere: +mv.pipeline_espere,
         pipeline_nb: +mv.pipeline_nb,
-        // Taux de recouvrement = versements réellement reçus / total facturé (ventes + contrats)
+        // Taux de recouvrement = versements réellement reçus / total facturé (ventes +
+        // contrats + dépôts-vente, tous les trois désormais couverts côté encaissé et facturé).
         encaisse_mois:  +ver.encaisse_mois,
         encaisse_ytd:   +ver.encaisse_ytd,
-        taux_recouvrement: (+k.total_facture + (+ech.total_facture)) > 0
-          ? Math.round(+ver.encaisse_total / (+k.total_facture + (+ech.total_facture)) * 100)
+        taux_recouvrement: (+k.total_facture + (+ech.total_facture) + (+dk.total_facture)) > 0
+          ? Math.round(+ver.encaisse_total / (+k.total_facture + (+ech.total_facture) + (+dk.total_facture)) * 100)
           : null,
         clients_actifs: clientsStatut['Actif'] || 0,
         clients_prospects: clientsStatut['Prospect'] || 0,
@@ -245,11 +347,19 @@ router.get('/', async (req, res) => {
         montant_encours: +cr.montant_encours + (+ech.montant_encours),
         nb_encours: +cr.nb_encours + (+ech.nb_encours),
       },
-      ca_mensuel: mensuel.rows.map(r => ({ annee: r.annee, mois: r.mois, ca: +r.ca })),
-      top_clients: topClients.rows.map(r => ({ nom: r.nom, ca_total: +r.ca_total, nb_ventes: +r.nb_ventes })),
-      ca_par_segment: segmentR.rows.map(r => ({ segment: r.segment, ca: +r.ca })),
-      ca_par_region:  regionR.rows.map(r => ({ region: r.region, ca: +r.ca })),
-      ca_par_produit: produitR.rows.map(r => ({ produit: r.produit, ca: +r.ca })),
+      ca_mensuel: mergeParCle(
+        mensuel.rows.map(r => ({ cle: `${r.annee}-${r.mois}`, annee: r.annee, mois: r.mois, ca: r.ca })),
+        depotMensuelR.rows.map(r => ({ cle: `${r.annee}-${r.mois}`, annee: r.annee, mois: r.mois, ca: r.ca })),
+        'cle'
+      ).map(r => ({ annee: r.annee, mois: r.mois, ca: r.ca })).sort((a, b) => a.annee - b.annee || a.mois - b.mois),
+      top_clients: mergeParCle(
+        topClients.rows.map(r => ({ nom: r.nom, ca: r.ca_total, nb_ventes: r.nb_ventes })),
+        depotTopClientsR.rows.map(r => ({ nom: r.nom, ca: r.ca_total, nb_ventes: r.nb_ventes })),
+        'nom', ['nb_ventes']
+      ).slice(0, 10).map(r => ({ nom: r.nom, ca_total: r.ca, nb_ventes: +(r.nb_ventes || 0) })),
+      ca_par_segment: mergeParCle(segmentR.rows, depotSegmentR.rows, 'segment').map(r => ({ segment: r.segment, ca: r.ca })),
+      ca_par_region:  mergeParCle(regionR.rows, depotRegionR.rows, 'region').map(r => ({ region: r.region, ca: r.ca })),
+      ca_par_produit: mergeParCle(produitR.rows, depotProduitR.rows, 'produit').map(r => ({ produit: r.produit, ca: r.ca })),
       atteinte_vendeurs,
       mouvements: {
         clients_gagnes: +mv.gagnes,

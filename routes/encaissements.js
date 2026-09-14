@@ -49,9 +49,27 @@ router.get('/search', async (req, res) => {
       [ids, like]
     );
 
+    // Dépôt-vente : le montant total n'est pas une colonne fixe (comme pour une vente) mais se
+    // déduit des quantités vendues déclarées par le distributeur (voir routes/depots.js) —
+    // c'est ce qui est facturable, contrairement à ce qui reste simplement déposé.
+    const depotsR = await pool.query(
+      `SELECT d.id, d.numero, d.client_nom, d.date_depot AS date,
+              COALESCE(mv.qv, 0) * d.prix_unitaire AS montant_total,
+              d.produit, d.note, d.statut_paiement AS statut,
+              COALESCE(ve.total_verse, 0) AS total_verse, u.nom AS vendeur_nom
+       FROM depots_vente d
+       LEFT JOIN users u ON u.id = d.user_id
+       LEFT JOIN (SELECT depot_vente_id, SUM(quantite) AS qv FROM depot_mouvements WHERE type='vente' GROUP BY depot_vente_id) mv ON mv.depot_vente_id = d.id
+       LEFT JOIN (SELECT depot_vente_id, SUM(montant) AS total_verse FROM versements WHERE statut_validation != 'rejete' GROUP BY depot_vente_id) ve ON ve.depot_vente_id = d.id
+       WHERE d.user_id = ANY($1::uuid[]) AND (d.numero ILIKE $2 OR d.client_nom ILIKE $2)
+       ORDER BY d.created_at DESC LIMIT 30`,
+      [ids, like]
+    );
+
     const results = [
       ...ventesR.rows.map((r) => ({ ...r, type: 'vente' })),
       ...echeancesR.rows.map((r) => ({ ...r, type: 'echeance' })),
+      ...depotsR.rows.map((r) => ({ ...r, type: 'depot' })),
     ];
     res.json(results);
   } catch (err) {
@@ -74,9 +92,10 @@ router.get('/mois', async (req, res) => {
        LEFT JOIN contrats_paddy    cp ON cp.id = v.contrat_paddy_id
        LEFT JOIN contrat_echeances ce ON ce.id = v.contrat_echeance_id
        LEFT JOIN contrats_clients  cce ON cce.id = ce.contrat_client_id
+       LEFT JOIN depots_vente      dv ON dv.id = v.depot_vente_id
        WHERE v.statut_validation = 'valide'
          AND DATE_TRUNC('month', v.date::date) = DATE_TRUNC('month', CURRENT_DATE)
-         AND (vt.user_id = ANY($1::uuid[]) OR cc.user_id = ANY($1::uuid[]) OR cp.user_id = ANY($1::uuid[]) OR cce.user_id = ANY($1::uuid[]))`,
+         AND (vt.user_id = ANY($1::uuid[]) OR cc.user_id = ANY($1::uuid[]) OR cp.user_id = ANY($1::uuid[]) OR cce.user_id = ANY($1::uuid[]) OR dv.user_id = ANY($1::uuid[]))`,
       [ids]
     );
     res.json({ total: Number(result.rows[0].total) });
@@ -91,7 +110,19 @@ function targetTable(type) {
   if (type === 'contrat')  return { table: 'contrats_clients', column: 'contrat_client_id' };
   if (type === 'paddy')    return { table: 'contrats_paddy',   column: 'contrat_paddy_id' };
   if (type === 'echeance') return { table: 'contrat_echeances', column: 'contrat_echeance_id' };
+  if (type === 'depot')    return { table: 'depots_vente',     column: 'depot_vente_id' };
   return null;
+}
+
+// Montant dû sur un dépôt-vente : quantités vendues déclarées par le distributeur (voir
+// routes/depots.js) × prix unitaire — recalculé à chaque versement, contrairement au montant
+// figé d'une vente classique, puisque de nouveaux rapports de vente peuvent l'augmenter.
+async function montantDuDepot(queryable, depotVenteId, prixUnitaire) {
+  const r = await queryable.query(
+    `SELECT COALESCE(SUM(quantite), 0) AS qv FROM depot_mouvements WHERE depot_vente_id=$1 AND type='vente'`,
+    [depotVenteId]
+  );
+  return +r.rows[0].qv * +prixUnitaire;
 }
 
 // Vérifie que l'utilisateur a accès à la transaction ciblée et renvoie la ligne si oui.
@@ -158,18 +189,21 @@ router.post('/:type/:id/versements', requirePerm('encaissements:versement'), asy
     // les race conditions (deux encaissements concurrents qui dépasseraient le montant dû),
     // plafond au montant restant, et mise à jour automatique du statut de paiement quand la
     // cible en a un (paddy n'a pas de statut_paiement propre — seul le plafond s'applique).
-    if (['vente', 'echeance', 'paddy'].includes(req.params.type)) {
-      const statutTable = req.params.type === 'vente' ? 'ventes' : req.params.type === 'echeance' ? 'contrat_echeances' : null;
-      // Colonne portant la prochaine date de paiement attendue — le paddy n'en a pas
-      // (aucun suivi d'échéance structuré sur ce type de contrat actuellement).
+    if (['vente', 'echeance', 'paddy', 'depot'].includes(req.params.type)) {
+      const statutTable = req.params.type === 'vente' ? 'ventes' : req.params.type === 'echeance' ? 'contrat_echeances' : req.params.type === 'depot' ? 'depots_vente' : null;
+      // Colonne portant la prochaine date de paiement attendue — le paddy et le dépôt-vente
+      // n'en ont pas (pas d'échéance fixe : le dépôt se règle au fil des ventes déclarées).
       const dateEcheanceColumn = req.params.type === 'vente' ? 'date_echeance' : req.params.type === 'echeance' ? 'date_paiement_prevue' : null;
       const versement = await withTransaction(async (client) => {
         const row = await findOwnedTarget(client, req.params.type, req.params.id, ids, { forUpdate: true });
         if (!row) { const e = new Error('Transaction non trouvee'); e.status = 404; throw e; }
 
         // Le paddy n'a pas de colonne montant : le total du contrat se déduit de quantite_kg *
-        // prix_kg, sur le même principe que la colonne générée `montant` des ventes.
-        const montantTotal = req.params.type === 'paddy' ? (+row.quantite_kg * +row.prix_kg) : +row.montant;
+        // prix_kg, sur le même principe que la colonne générée `montant` des ventes. Le
+        // dépôt-vente n'a pas non plus de montant figé : voir montantDuDepot.
+        const montantTotal = req.params.type === 'paddy' ? (+row.quantite_kg * +row.prix_kg)
+          : req.params.type === 'depot' ? await montantDuDepot(client, req.params.id, row.prix_unitaire)
+          : +row.montant;
 
         // Exclut les versements rejetés par le comptable : un rejet libère le montant pour
         // permettre une nouvelle déclaration correcte.
@@ -219,20 +253,21 @@ router.delete('/versements/:id', requirePerm('encaissements:versement'), async (
       // ou l'échéance de contrat (celle-ci passe par contrats_clients, sans user_id propre).
       const verR = await client.query(
         `SELECT v.*, vt.user_id AS vente_user_id, cc.user_id AS contrat_user_id,
-                cp.user_id AS paddy_user_id, cce.user_id AS echeance_user_id
+                cp.user_id AS paddy_user_id, cce.user_id AS echeance_user_id, dv.user_id AS depot_user_id
          FROM versements v
          LEFT JOIN ventes            vt  ON vt.id  = v.vente_id
          LEFT JOIN contrats_clients  cc  ON cc.id  = v.contrat_client_id
          LEFT JOIN contrats_paddy    cp  ON cp.id  = v.contrat_paddy_id
          LEFT JOIN contrat_echeances ce  ON ce.id  = v.contrat_echeance_id
          LEFT JOIN contrats_clients  cce ON cce.id = ce.contrat_client_id
+         LEFT JOIN depots_vente      dv  ON dv.id  = v.depot_vente_id
          WHERE v.id = $1`,
         [req.params.id]
       );
       if (!verR.rows.length) { const e = new Error('Versement non trouvé'); e.status = 404; throw e; }
       const ver = verR.rows[0];
 
-      const ownerId = ver.vente_user_id || ver.contrat_user_id || ver.paddy_user_id || ver.echeance_user_id;
+      const ownerId = ver.vente_user_id || ver.contrat_user_id || ver.paddy_user_id || ver.echeance_user_id || ver.depot_user_id;
       const idsSet = new Set(ids.map(String));
       if (!ownerId || !idsSet.has(String(ownerId))) {
         const e = new Error('Versement non trouvé'); e.status = 404; throw e;
@@ -247,6 +282,8 @@ router.delete('/versements/:id', requirePerm('encaissements:versement'), async (
         ? { table: 'ventes', column: 'vente_id', id: ver.vente_id }
         : ver.contrat_echeance_id
         ? { table: 'contrat_echeances', column: 'contrat_echeance_id', id: ver.contrat_echeance_id }
+        : ver.depot_vente_id
+        ? { table: 'depots_vente', column: 'depot_vente_id', id: ver.depot_vente_id }
         : null;
 
       if (cible) {
@@ -258,9 +295,12 @@ router.delete('/versements/:id', requirePerm('encaissements:versement'), async (
              WHERE ${cible.column}=$1 AND statut_validation != 'rejete'`, [cible.id]
           );
           const total = +totalR.rows[0].total;
+          // Le dépôt-vente n'a pas de colonne montant figée : le montant dû se déduit des
+          // quantités vendues déclarées (voir montantDuDepot), contrairement à une vente.
+          const montantTotal = cible.table === 'depots_vente' ? await montantDuDepot(client, cible.id, row.prix_unitaire) : +row.montant;
           // 'En cours' que le total retombe à 0 ou reste partiel — 'Non payé' n'est pas une
           // valeur autorisée par la contrainte CHECK (voir schema.sql).
-          const newStatut = total >= +row.montant ? 'Paye' : 'En cours';
+          const newStatut = total >= montantTotal ? 'Paye' : 'En cours';
           if (newStatut !== row.statut_paiement) {
             await client.query(`UPDATE ${cible.table} SET statut_paiement=$1 WHERE id=$2`, [newStatut, cible.id]);
           }

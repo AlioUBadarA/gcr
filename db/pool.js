@@ -440,6 +440,65 @@ async function runMigrations() {
        ALTER TABLE emplois ADD CONSTRAINT emplois_role_plateforme_check
          CHECK (role_plateforme IN ('vendeur','manager','directeur','comptable'));
      EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
+
+    // ── Délais de paiement B2B étendus (15 à 90 jours) ────────────────────────
+    // Les ventes institutionnelles négocient couramment des délais allant jusqu'à 90 jours
+    // (pas seulement 15/30) — voir gcr/utils/paiement.js.
+    `ALTER TABLE ventes DROP CONSTRAINT IF EXISTS ventes_conditions_paiement_check`,
+    `DO $$ BEGIN
+       ALTER TABLE ventes ADD CONSTRAINT ventes_conditions_paiement_check
+         CHECK (conditions_paiement IS NULL OR conditions_paiement IN (
+           'Comptant','J+15','J+30','J+45','J+60','J+90',
+           '50% comptant / 50% J+15','50% comptant / 50% J+30'
+         ));
+     EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
+
+    // ── Dépôt-vente ─────────────────────────────────────────────────────────
+    // L'agroprocesseur dépose une quantité chez un distributeur/point de vente ; celui-ci ne
+    // règle que ce qu'il a effectivement écoulé, déclaré par rapports périodiques (voir
+    // routes/depots.js). `statut` suit l'état du dépôt physique (stock encore chez le
+    // distributeur ou entièrement écoulé/retourné) ; `statut_paiement` suit le règlement des
+    // quantités déjà vendues — les deux évoluent indépendamment.
+    `CREATE TABLE IF NOT EXISTS depots_vente (
+       id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+       user_id           UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       client_id         UUID REFERENCES clients(id) ON DELETE SET NULL,
+       client_nom        VARCHAR(150) NOT NULL,
+       produit           VARCHAR(100) NOT NULL,
+       quantite_deposee  NUMERIC(10,2) NOT NULL CHECK (quantite_deposee > 0),
+       prix_unitaire     NUMERIC(10,2) NOT NULL CHECK (prix_unitaire > 0),
+       date_depot        DATE NOT NULL,
+       statut            VARCHAR(20) NOT NULL DEFAULT 'En cours' CHECK (statut IN ('En cours','Clôturé')),
+       statut_paiement   VARCHAR(20) NOT NULL DEFAULT 'En cours' CHECK (statut_paiement IN ('En cours','Paye')),
+       note              TEXT,
+       numero            VARCHAR(20),
+       created_at        TIMESTAMPTZ DEFAULT NOW(),
+       updated_at        TIMESTAMPTZ DEFAULT NOW()
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_depots_vente_user   ON depots_vente(user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_depots_vente_statut ON depots_vente(statut)`,
+    // Rapports périodiques du distributeur : quantité vendue depuis le dernier passage, ou
+    // quantité invendue retournée. Le solde restant en dépôt et le montant dû (quantités
+    // vendues déclarées × prix unitaire) se déduisent en cumulant ces mouvements.
+    `CREATE TABLE IF NOT EXISTS depot_mouvements (
+       id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+       depot_vente_id UUID NOT NULL REFERENCES depots_vente(id) ON DELETE CASCADE,
+       type           VARCHAR(10) NOT NULL CHECK (type IN ('vente','retour')),
+       quantite       NUMERIC(10,2) NOT NULL CHECK (quantite > 0),
+       date           DATE NOT NULL DEFAULT CURRENT_DATE,
+       note           TEXT,
+       created_at     TIMESTAMPTZ DEFAULT NOW()
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_depot_mouvements_depot ON depot_mouvements(depot_vente_id)`,
+    // Règlements d'un dépôt-vente : se rattachent au dépôt comme une 6e cible possible pour un
+    // versement (même mécanisme que ventes/contrats/paddy/échéances).
+    `ALTER TABLE versements ADD COLUMN IF NOT EXISTS depot_vente_id UUID REFERENCES depots_vente(id) ON DELETE CASCADE`,
+    `CREATE INDEX IF NOT EXISTS idx_versements_depot_vente ON versements(depot_vente_id)`,
+    `DO $$ BEGIN
+       ALTER TABLE versements DROP CONSTRAINT IF EXISTS versements_one_target_check;
+       ALTER TABLE versements ADD CONSTRAINT versements_one_target_check
+         CHECK (num_nonnulls(vente_id, contrat_client_id, contrat_paddy_id, contrat_echeance_id, depot_vente_id) = 1);
+     EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
   ];
 
   for (let i = 0; i < migrations.length; i++) {
@@ -511,6 +570,7 @@ async function reassignUserData(client, fromUserId, toUserId) {
   await client.query('UPDATE emplois SET user_id=$1 WHERE user_id=$2', [toUserId, fromUserId]);
   await client.query('UPDATE contrats_clients SET user_id=$1 WHERE user_id=$2', [toUserId, fromUserId]);
   await client.query('UPDATE contrats_paddy SET user_id=$1 WHERE user_id=$2', [toUserId, fromUserId]);
+  await client.query('UPDATE depots_vente SET user_id=$1 WHERE user_id=$2', [toUserId, fromUserId]);
   await client.query('UPDATE prospection SET user_id=$1 WHERE user_id=$2', [toUserId, fromUserId]);
   await client.query('UPDATE activites SET user_id=$1 WHERE user_id=$2', [toUserId, fromUserId]);
   // produits a une contrainte UNIQUE(user_id, ref) : on ne réassigne que les références
@@ -534,6 +594,7 @@ async function hasOwnBusinessData(userId) {
        (SELECT COUNT(*) FROM emplois WHERE user_id=$1)          AS emplois,
        (SELECT COUNT(*) FROM contrats_clients WHERE user_id=$1) AS contrats_clients,
        (SELECT COUNT(*) FROM contrats_paddy WHERE user_id=$1)   AS contrats_paddy,
+       (SELECT COUNT(*) FROM depots_vente WHERE user_id=$1)     AS depots_vente,
        (SELECT COUNT(*) FROM prospection WHERE user_id=$1)      AS prospection,
        (SELECT COUNT(*) FROM produits WHERE user_id=$1)         AS produits`,
     [userId]
