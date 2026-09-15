@@ -250,6 +250,9 @@
 - Toutes les données métier sont archivées en snapshot JSON dans `deleted_data_archives` avant suppression en cascade
 - Archives consultables via `GET /api/admin/archives`
 
+### Interface
+- **Sidebar repliable** — la barre de navigation latérale peut désormais être réduite via l'icône hamburger pour libérer de l'espace sur l'écran
+
 ---
 
-*Fichier généré automatiquement — dernière mise à jour : 14 septembre 2026*
+*Fichier généré automatiquement — dernière mise à jour : 15 septembre 2026*
