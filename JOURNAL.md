@@ -238,4 +238,18 @@
 
 ---
 
-*Fichier généré automatiquement — dernière mise à jour : 13 septembre 2026*
+## 14 septembre 2026
+
+### Module Dépôt-Vente
+- **Nouveau module dépôt-vente** — gestion des distributeurs qui ne règlent que ce qu'ils ont réellement écoulé, déclaré par rapports périodiques : nouvelles tables `depots_vente` et `depot_mouvements`, route dédiée `routes/depots.js`
+- CA reconnu aux quantités effectivement vendues (pas au dépôt initial), intégré dans les encaissements, le dashboard, le forecast et la rentabilité
+- **Délais de paiement B2B** — ajout des échéances J+45, J+60 et J+90 pour les ventes institutionnelles
+
+### Administration
+- **Suppression forcée (superadmin)** — un compte racine ou une rizerie ayant encore des ventes/emplois/clients rattachés peut désormais être supprimé de force par le superadmin
+- Toutes les données métier sont archivées en snapshot JSON dans `deleted_data_archives` avant suppression en cascade
+- Archives consultables via `GET /api/admin/archives`
+
+---
+
+*Fichier généré automatiquement — dernière mise à jour : 14 septembre 2026*
