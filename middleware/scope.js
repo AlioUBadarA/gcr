@@ -24,9 +24,44 @@ async function getScopeIds(userId, role) {
     return [userId, ...r.rows.map(x => x.id)];
   }
 
-  // directeur et rizier : toute la hiérarchie commerciale en dessous (récursif)
+  // Rizier : toute la rizerie. Une rizerie peut avoir plusieurs riziers (co-responsables) ;
+  // chacun voit l'activité de tous les comptes de la rizerie, y compris les équipes créées
+  // par les autres riziers. Les membres sans rizerie_id sont rattrapés via la hiérarchie
+  // parent_id partant de chacun des riziers de la rizerie.
+  if (role === 'rizier') {
+    const r = await pool.query(`
+      WITH RECURSIVE me AS (
+        SELECT rizerie_id FROM users WHERE id = $1
+      ),
+      roots AS (
+        SELECT $1::uuid AS id
+        UNION
+        SELECT u.id FROM users u, me
+        WHERE u.role = 'rizier' AND me.rizerie_id IS NOT NULL AND u.rizerie_id = me.rizerie_id
+      ),
+      team AS (
+        SELECT u.id, u.role FROM users u
+          INNER JOIN roots ro ON u.parent_id = ro.id
+          WHERE u.role IN ('directeur','manager','vendeur')
+        UNION ALL
+        SELECT u.id, u.role FROM users u
+          INNER JOIN team t ON u.parent_id = t.id
+          WHERE u.role IN ('directeur','manager','vendeur') AND t.role IN ('directeur','manager')
+      )
+      SELECT id FROM roots
+      UNION
+      SELECT id FROM team
+      UNION
+      SELECT u.id FROM users u, me
+      WHERE me.rizerie_id IS NOT NULL AND u.rizerie_id = me.rizerie_id
+        AND u.role IN ('rizier','directeur','manager','vendeur')
+    `, [userId]);
+    const ids = r.rows.map(x => x.id).filter(id => id !== userId);
+    return [userId, ...ids];
+  }
+
+  // directeur : toute la hiérarchie commerciale en dessous (récursif)
   // directeur → managers + vendeurs sous ces managers + vendeurs directs
-  // rizier → directeurs + tout ce qui est dessous (managers, vendeurs)
   const r = await pool.query(`
     WITH RECURSIVE team AS (
       SELECT id, role FROM users

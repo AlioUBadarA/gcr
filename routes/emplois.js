@@ -12,6 +12,21 @@ const TYPES = ['CDI','CDD','Temps partiel','Stage','Journalier'];
 const SEXES = ['Homme','Femme'];
 const PIECES_IDENTITE = ['CNI','Passeport','Permis de conduire','Autre'];
 
+// Propriétaires des fiches employé visibles/modifiables par l'utilisateur. Un rizier gère
+// les fiches de toute sa rizerie (y compris celles saisies par un autre rizier de la même
+// rizerie) ; les autres rôles ne gèrent que les fiches qu'ils ont eux-mêmes créées.
+async function emploiOwnerIds(req) {
+  if (req.userRole !== 'rizier') return [req.userId];
+  const r = await pool.query(
+    `SELECT u.id FROM users u
+     WHERE u.role = 'rizier'
+       AND u.rizerie_id = (SELECT rizerie_id FROM users WHERE id = $1)`,
+    [req.userId]
+  );
+  const ids = r.rows.map(x => x.id);
+  return ids.includes(req.userId) ? ids : [req.userId, ...ids];
+}
+
 // Champs état civil communs à la création et la modification d'une fiche employé.
 function etatCivilFields(body) {
   const { date_naissance, lieu_naissance, sexe, nationalite, piece_identite_type, piece_identite_numero, adresse } = body;
@@ -32,8 +47,8 @@ router.get('/', async (req, res) => {
       `SELECT e.*, u.email AS compte_email, u.suspended AS compte_suspendu
        FROM emplois e
        LEFT JOIN users u ON u.id = e.user_account_id
-       WHERE e.user_id = $1 ORDER BY e.nom`,
-      [req.userId]
+       WHERE e.user_id = ANY($1::uuid[]) ORDER BY e.nom`,
+      [await emploiOwnerIds(req)]
     );
     res.json(result.rows);
   } catch (err) {
@@ -49,8 +64,8 @@ router.get('/:id', async (req, res) => {
       `SELECT e.*, u.email AS compte_email, u.suspended AS compte_suspendu
        FROM emplois e
        LEFT JOIN users u ON u.id = e.user_account_id
-       WHERE e.id=$1 AND e.user_id=$2`,
-      [req.params.id, req.userId]
+       WHERE e.id=$1 AND e.user_id = ANY($2::uuid[])`,
+      [req.params.id, await emploiOwnerIds(req)]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Employé non trouvé' });
     res.json(result.rows[0]);
@@ -138,16 +153,17 @@ router.put('/:id', async (req, res) => {
     const etatCivilErr = validateEtatCivil(etatCivil);
     if (etatCivilErr) return res.status(400).json({ error: etatCivilErr });
     const periodeVal = ['Avant RIZAO', 'Avec RIZAO'].includes(periode_rizao) ? periode_rizao : 'Avec RIZAO';
+    const ownerIds = await emploiOwnerIds(req);
     const result = await withTransaction(async (client) => {
       const r = await client.query(
         `UPDATE emplois SET nom=$1, poste=$2, type_contrat=$3, date_embauche=$4,
            salaire=$5, telephone=$6, note=$7, periode_rizao=$8,
            date_naissance=$11, lieu_naissance=$12, sexe=$13, nationalite=$14,
            piece_identite_type=$15, piece_identite_numero=$16, adresse=$17
-         WHERE id=$9 AND user_id=$10 RETURNING *`,
+         WHERE id=$9 AND user_id = ANY($10::uuid[]) RETURNING *`,
         [nom, poste || null, type_contrat || 'CDI', date_embauche || null,
          salaire || null, telephone || null, note || null, periodeVal,
-         req.params.id, req.userId,
+         req.params.id, ownerIds,
          etatCivil.date_naissance || null, etatCivil.lieu_naissance || null, etatCivil.sexe || null,
          etatCivil.nationalite || null, etatCivil.piece_identite_type || null,
          etatCivil.piece_identite_numero || null, etatCivil.adresse || null]
@@ -190,10 +206,11 @@ router.patch('/:id/affecter', async (req, res) => {
       return res.status(400).json({ error: 'objectif_annuel doit etre un nombre positif ou nul' });
     }
 
+    const ownerIds = await emploiOwnerIds(req);
     const emploi = await withTransaction(async (client) => {
       const emploiR = await client.query(
-        'SELECT * FROM emplois WHERE id=$1 AND user_id=$2 FOR UPDATE',
-        [req.params.id, req.userId]
+        'SELECT * FROM emplois WHERE id=$1 AND user_id = ANY($2::uuid[]) FOR UPDATE',
+        [req.params.id, ownerIds]
       );
       if (!emploiR.rows.length) { const e = new Error('Employé non trouvé'); e.status = 404; throw e; }
       const existing = emploiR.rows[0];
@@ -253,10 +270,11 @@ router.patch('/:id/affecter', async (req, res) => {
 // Suspend le compte plateforme lié (s'il existe) dans la même transaction que la suppression.
 router.delete('/:id', async (req, res) => {
   try {
+    const ownerIds = await emploiOwnerIds(req);
     const found = await withTransaction(async (client) => {
       const result = await client.query(
-        'DELETE FROM emplois WHERE id=$1 AND user_id=$2 RETURNING id, user_account_id',
-        [req.params.id, req.userId]
+        'DELETE FROM emplois WHERE id=$1 AND user_id = ANY($2::uuid[]) RETURNING id, user_account_id',
+        [req.params.id, ownerIds]
       );
       if (!result.rows.length) return false;
 
