@@ -345,4 +345,14 @@
 
 ---
 
-*Fichier généré automatiquement — dernière mise à jour : 27 septembre 2026*
+## 28 septembre 2026
+
+### Périmètre rizier — Refonte du scope multi-rizier
+
+- **Scope élargi à la rizerie entière** — un rizier voit désormais toute l'activité de sa rizerie (riziers, directeurs, managers, vendeurs), et non plus uniquement sa hiérarchie `parent_id`
+- Correction du middleware `scope.js` : le périmètre couvre tous les comptes de la rizerie quelle que soit leur position dans l'organigramme
+- **Emplois partagés entre riziers** — les fiches emplois d'une rizerie sont accessibles par tous ses riziers (`routes/emplois.js`)
+
+---
+
+*Fichier généré automatiquement — dernière mise à jour : 28 septembre 2026*
