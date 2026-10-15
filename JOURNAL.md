@@ -461,9 +461,11 @@
 
 ## 14 octobre 2026
 
-### Maintenance
-- **Journal quotidien** — mise à jour automatique du journal de développement (entrée du 13 octobre 2026)
+### Mode démo
+- **Compte démo avec fausse API locale** — bouton « Essayer la démo » sur la page de connexion qui bascule l'application vers une API simulée dans le navigateur (aucun appel serveur)
+- Jeu de données fictif d'une rizerie complète : équipe, clients, ventes, contrats, dépôts
+- **Bandeau démo** — barre persistante en haut de l'écran avec bouton de réinitialisation des données et de sortie du mode démo
 
 ---
 
-*Fichier généré automatiquement — dernière mise à jour : 14 octobre 2026*
+*Fichier généré automatiquement — dernière mise à jour : 15 octobre 2026*
