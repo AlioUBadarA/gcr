@@ -997,7 +997,7 @@ router.get('/connexions', async (req, res) => {
         SELECT
           created_at::date                    AS date,
           COUNT(*)::int                       AS nb_connexions,
-          COUNT(DISTINCT actor_id)::int       AS nb_utilisateurs
+          COUNT(DISTINCT target_id)::int      AS nb_utilisateurs
         FROM audit_logs
         WHERE action = 'LOGIN_SUCCESS'
           AND created_at >= NOW() - INTERVAL '30 days'
@@ -1027,7 +1027,7 @@ router.get('/connexions', async (req, res) => {
           COUNT(*) FILTER (WHERE created_at::date = CURRENT_DATE)::int             AS aujourd_hui,
           COUNT(*) FILTER (WHERE created_at >= date_trunc('week', NOW()))::int      AS cette_semaine,
           COUNT(*) FILTER (WHERE created_at >= date_trunc('month', NOW()))::int     AS ce_mois,
-          COUNT(DISTINCT actor_id) FILTER (WHERE created_at::date = CURRENT_DATE)::int AS uniques_aujourd_hui
+          COUNT(DISTINCT target_id) FILTER (WHERE created_at::date = CURRENT_DATE)::int AS uniques_aujourd_hui
         FROM audit_logs
         WHERE action = 'LOGIN_SUCCESS'
       `),
