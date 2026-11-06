@@ -606,4 +606,14 @@
 
 ---
 
-*Fichier généré automatiquement — dernière mise à jour : 3 novembre 2026*
+## 5 novembre 2026
+
+### Refonte de l'interface utilisateur
+- **Page de connexion** — nouveau design premium en deux panneaux (identité à gauche, connexion à droite) ; responsive sans défilement sur desktop et formulaire plein écran sur mobile ; logique d'authentification, validations et redirections conservées
+- **Sidebar repliable** — nouvelle navigation latérale 260 px (étendue) / 80 px (réduite) avec sous-menus, indicateur de page active, tooltips et repli automatique sur tablette ; drawer sur mobile
+- **Header fixe** — fil d'Ariane, recherche de navigation (Ctrl+K), centre de notifications et menu profil
+- Configuration des menus centralisée avec filtrage par rôle ; contenu principal et pied de page adaptatifs
+
+---
+
+*Fichier généré automatiquement — dernière mise à jour : 5 novembre 2026*
