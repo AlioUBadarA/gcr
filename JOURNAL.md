@@ -616,4 +616,20 @@
 
 ---
 
-*Fichier généré automatiquement — dernière mise à jour : 5 novembre 2026*
+## 6 novembre 2026
+
+### Page de connexion & Identité visuelle
+- **Refonte complète de la page de connexion Sales Cockpit** — panneau gauche en dégradé vert-bleu PFS s'estompant vers le formulaire, message de bienvenue Partners In Food Solutions, formulaire élargi de 430 à 500 px sur grand écran
+- Logo PFS agrandi à 72 px, nom « Partners In Food Solutions » en gras sur une ligne, « Sales Cockpit » en 25 px
+- Typographies Source Sans 3 (texte) et Source Serif 4 (titres) avec chiffres tabulaires
+- Application renommée « Sales Cockpit »
+
+### Corrections & Nettoyage
+- **Notifications** — la cloche affiche désormais les vraies alertes à traiter (`/api/actions`) au lieu d'un compteur figé à 0 ; masquée pour les rôles admin et comptable
+- **« Se souvenir de moi »** — l'identifiant n'est mémorisé qu'après une connexion réussie
+- **Statistiques de connexions (admin)** — les LOGIN_SUCCESS étant journalisés avec `actor_id = NULL` et l'utilisateur dans `target_id`, le nombre d'utilisateurs uniques affichait toujours 0 ; corrigé en lisant `target_id`
+- **Scripts e-mails de bienvenue supprimés** — devenus inutilisables (chemin de logo manquant, mot de passe envoyé en clair) ; dépendances nodemailer et resend retirées
+
+---
+
+*Fichier généré automatiquement — dernière mise à jour : 6 novembre 2026*
