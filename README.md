@@ -2,9 +2,9 @@
 
 Backend Node.js/Express pour la plateforme de pilotage commercial PFS.
 
-> Le frontend (React/Vite) vit dans un dépôt séparé (`pfs-cockpit`). Ce backend est déjà déployé sur Render ; consultez votre dashboard Render pour les noms de service et URLs réels — les exemples ci-dessous utilisent des placeholders génériques.
+> Le frontend React/Vite est dans le dépôt séparé `pfs-cockpit`. Ce backend tourne déjà sur Render. Votre tableau de bord Render donne les vrais noms de service et les vraies URL. Les exemples ci-dessous utilisent des valeurs génériques.
 >
-> Cette doc ne liste qu'un sous-ensemble des endpoints (auth, clients, ventes, pilotage, dashboard) à titre d'exemple. Toutes les autres ressources (`routes/*.js` : produits, contrats, prospection, emplois, encaissements, admin, etc.) suivent le même pattern REST + JWT.
+> Cette doc donne seulement quelques endpoints en exemple. Elle couvre auth, clients, ventes, pilotage et dashboard. Les autres ressources sont dans `routes/*.js`. Ce sont par exemple produits, contrats, prospection, emplois, encaissements et admin. Elles suivent le même modèle REST + JWT.
 
 ## Stack
 
@@ -50,12 +50,12 @@ git push -u origin main
    - **Plan** : Free
 4. Dans **Environment Variables**, ajouter :
    - `DATABASE_URL` : coller l'Internal Database URL copiee a l'etape 2
-   - `JWT_SECRET` : une chaine aleatoire longue (ex: generer sur [randomkeygen.com](https://randomkeygen.com))
+   - `JWT_SECRET` : une longue chaîne aléatoire. Vous pouvez la générer sur [randomkeygen.com](https://randomkeygen.com).
    - `NODE_ENV` : `production`
-   - `FRONTEND_URL` : URL de votre frontend (ou `*` pour tout autoriser)
+   - `FRONTEND_URL` : URL de votre frontend. Mettez `*` pour tout autoriser.
 5. Cliquer **Create Web Service**
 
-Le schema SQL s'initialise automatiquement au premier demarrage.
+Le schéma SQL se crée au premier démarrage.
 
 ---
 
@@ -65,7 +65,7 @@ Le schema SQL s'initialise automatiquement au premier demarrage.
 
 | Methode | Endpoint | Description |
 |---------|----------|-------------|
-| POST | `/api/auth/register` | Désactivé — renvoie 403 (les comptes sont créés par le superadmin via `/api/admin/users`) |
+| POST | `/api/auth/register` | Désactivé. Renvoie 403. Le superadmin crée les comptes via `/api/admin/users`. |
 | POST | `/api/auth/login` | Se connecter |
 | GET | `/api/auth/me` | Profil courant |
 | PUT | `/api/auth/me` | Modifier profil |
