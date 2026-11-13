@@ -465,6 +465,44 @@ router.patch('/users/:id/suspend', async (req, res) => {
   }
 });
 
+// GET /api/admin/suspensions — tous les comptes suspendus (tous rôles), avec le
+// motif, la date et l'auteur de la suspension (dernier ACCOUNT_SUSPENDED du journal).
+router.get('/suspensions', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT
+        u.id, u.nom, u.email, u.role,
+        u.suspended_reason, u.suspended_at,
+        COALESCE(r.nom, u.rizerie, pr.nom) AS rizerie,
+        COALESCE(r.pays, pr.pays)          AS pays,
+        sus.actor_nom                      AS suspendu_par,
+        lg.derniere_connexion
+      FROM users u
+      LEFT JOIN rizeries r  ON r.id  = u.rizerie_id
+      LEFT JOIN users p     ON p.id  = u.parent_id
+      LEFT JOIN rizeries pr ON pr.id = p.rizerie_id
+      LEFT JOIN LATERAL (
+        SELECT a.actor_nom
+        FROM audit_logs a
+        WHERE a.action = 'ACCOUNT_SUSPENDED' AND a.target_id = u.id
+        ORDER BY a.created_at DESC
+        LIMIT 1
+      ) sus ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT MAX(a.created_at) AS derniere_connexion
+        FROM audit_logs a
+        WHERE a.action = 'LOGIN_SUCCESS' AND a.target_id = u.id
+      ) lg ON TRUE
+      WHERE u.suspended = TRUE
+      ORDER BY u.suspended_at DESC NULLS LAST, u.nom
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    logger.error('admin suspensions', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
 // PATCH /api/admin/users/:id/password — réinitialiser le mot de passe
 router.patch('/users/:id/password', async (req, res) => {
   try {
@@ -1040,6 +1078,108 @@ router.get('/connexions', async (req, res) => {
     });
   } catch (err) {
     logger.error('GET connexions', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// GET /api/admin/connexions-riziers?pays=XX
+// Connexions des vrais riziers uniquement : on exclut les autres rôles
+// (support, superadmin, vendeur…) et les comptes de test ou de démo,
+// repérés par « test » ou « demo » dans le nom, l'e-mail ou la rizerie.
+const VRAIS_RIZIERS = `
+  u.role = 'rizier'
+  AND u.nom   NOT ILIKE '%test%' AND u.nom   NOT ILIKE '%demo%'
+  AND u.email NOT ILIKE '%test%' AND u.email NOT ILIKE '%demo%'
+  AND COALESCE(r.nom, u.rizerie, '') NOT ILIKE '%test%'
+  AND COALESCE(r.nom, u.rizerie, '') NOT ILIKE '%demo%'
+`;
+
+router.get('/connexions-riziers', async (req, res) => {
+  try {
+    const pays = typeof req.query.pays === 'string' && req.query.pays.trim() ? req.query.pays.trim() : null;
+
+    // CTE commun : riziers retenus (filtrés par pays) et leurs connexions réussies.
+    const base = `
+      WITH riz AS (
+        SELECT u.id, u.nom, COALESCE(r.nom, u.rizerie) AS rizerie, r.pays
+        FROM users u
+        LEFT JOIN rizeries r ON r.id = u.rizerie_id
+        WHERE ${VRAIS_RIZIERS}
+          AND ($1::text IS NULL OR r.pays = $1)
+      ),
+      logins AS (
+        SELECT a.target_id, a.created_at
+        FROM audit_logs a
+        JOIN riz ON riz.id = a.target_id
+        WHERE a.action = 'LOGIN_SUCCESS'
+      )
+    `;
+    const serie = (pas, nb) => `
+      ${base}
+      SELECT TO_CHAR(p, 'YYYY-MM-DD')               AS periode,
+             COUNT(l.target_id)::int                AS nb_connexions,
+             COUNT(DISTINCT l.target_id)::int       AS nb_riziers
+      FROM generate_series(
+             date_trunc('${pas}', CURRENT_DATE::timestamptz) - INTERVAL '${nb - 1} ${pas}',
+             date_trunc('${pas}', CURRENT_DATE::timestamptz),
+             INTERVAL '1 ${pas}'
+           ) AS p
+      LEFT JOIN logins l ON date_trunc('${pas}', l.created_at) = p
+      GROUP BY p
+      ORDER BY p
+    `;
+
+    const [paysR, kpiR, jourR, semaineR, moisR, riziersR] = await Promise.all([
+      // Pays disponibles pour le filtre (sur tous les vrais riziers, sans filtre pays)
+      pool.query(`
+        SELECT DISTINCT r.pays
+        FROM users u
+        JOIN rizeries r ON r.id = u.rizerie_id
+        WHERE ${VRAIS_RIZIERS} AND r.pays IS NOT NULL AND r.pays <> ''
+        ORDER BY r.pays
+      `),
+      pool.query(`
+        ${base}
+        SELECT
+          (SELECT COUNT(*) FROM riz)::int AS total_riziers,
+          COUNT(*) FILTER (WHERE created_at::date = CURRENT_DATE)::int                           AS jour,
+          COUNT(DISTINCT target_id) FILTER (WHERE created_at::date = CURRENT_DATE)::int          AS riziers_jour,
+          COUNT(*) FILTER (WHERE created_at >= date_trunc('week', NOW()))::int                   AS semaine,
+          COUNT(DISTINCT target_id) FILTER (WHERE created_at >= date_trunc('week', NOW()))::int  AS riziers_semaine,
+          COUNT(*) FILTER (WHERE created_at >= date_trunc('month', NOW()))::int                  AS mois,
+          COUNT(DISTINCT target_id) FILTER (WHERE created_at >= date_trunc('month', NOW()))::int AS riziers_mois
+        FROM logins
+      `, [pays]),
+      pool.query(serie('day', 30), [pays]),
+      pool.query(serie('week', 12), [pays]),
+      pool.query(serie('month', 12), [pays]),
+      // Détail par rizier, y compris ceux qui ne se sont jamais connectés
+      pool.query(`
+        ${base}
+        SELECT
+          riz.id, riz.nom, riz.rizerie, riz.pays,
+          COUNT(l.target_id) FILTER (WHERE l.created_at::date = CURRENT_DATE)::int          AS jour,
+          COUNT(l.target_id) FILTER (WHERE l.created_at >= date_trunc('week', NOW()))::int  AS semaine,
+          COUNT(l.target_id) FILTER (WHERE l.created_at >= date_trunc('month', NOW()))::int AS mois,
+          COUNT(l.target_id)::int                                                           AS total,
+          MAX(l.created_at)                                                                 AS derniere_connexion
+        FROM riz
+        LEFT JOIN logins l ON l.target_id = riz.id
+        GROUP BY riz.id, riz.nom, riz.rizerie, riz.pays
+        ORDER BY mois DESC, derniere_connexion DESC NULLS LAST, riz.nom
+      `, [pays]),
+    ]);
+
+    res.json({
+      pays:     paysR.rows.map(r => r.pays),
+      kpi:      kpiR.rows[0],
+      jour:     jourR.rows,
+      semaine:  semaineR.rows,
+      mois:     moisR.rows,
+      riziers:  riziersR.rows,
+    });
+  } catch (err) {
+    logger.error('GET connexions-riziers', { err: err.message, stack: err.stack, userId: req.userId, ip: req.ip });
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
