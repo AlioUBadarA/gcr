@@ -632,4 +632,12 @@
 
 ---
 
-*Fichier généré automatiquement. Dernière mise à jour : 6 novembre 2026.*
+## 12 novembre 2026
+
+### Documentation & Textes de l'interface
+- **Simplification des textes de l'interface.** Les textes d'aide, le Guide, les bannières et les messages sont réécrits. Ils sont plus courts et plus directs.
+- La prose du README et du JOURNAL est allégée.
+
+---
+
+*Fichier généré automatiquement. Dernière mise à jour : 12 novembre 2026.*
